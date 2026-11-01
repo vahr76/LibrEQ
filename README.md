@@ -1,6 +1,6 @@
-# Arielo EQ
+# LibrEQ
 
-EQ paramétrico original para Linux, C++20 + JUCE + CMake, con una UX inspirada en el flujo de trabajo de EQs profesionales sin copiar código, assets o identidad propietaria.
+EQ paramétrico original, libre y comunitario para Linux, C++20 + JUCE + CMake: la música es de todos y para todos.
 
 Implementado: motor DSP desacoplado, 24 ranuras internas, 8 bandas parametrizadas en el estado, Bell/HP/LP/Notch, frecuencia/ganancia/Q, automatización y estado serializable. El procesamiento no asigna memoria en el callback.
 
