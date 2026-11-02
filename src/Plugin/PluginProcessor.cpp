@@ -20,6 +20,15 @@ void LibrEQAudioProcessor::prepareToPlay(double sampleRate, int blockSize) { eq.
 
 void LibrEQAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) {
     juce::ScopedNoDenormals noDenormals;
+    for (int i = 0; i < 8; ++i) {
+        const auto id = juce::String(i + 1);
+        arielo::Band band;
+        band.type = arielo::FilterType::Bell;
+        band.frequency = parameters.getRawParameterValue("freq" + id)->load();
+        band.gainDb = parameters.getRawParameterValue("gain" + id)->load();
+        band.q = parameters.getRawParameterValue("q" + id)->load();
+        eq.setBand((std::size_t) i, band);
+    }
     float* channels[2] = { buffer.getWritePointer(0), buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : buffer.getWritePointer(0) };
     eq.process(channels, buffer.getNumChannels(), buffer.getNumSamples());
 }
