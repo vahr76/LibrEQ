@@ -7,7 +7,7 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createLayout() {
         const auto id = juce::String(i + 1);
         layout.add(std::make_unique<juce::AudioParameterFloat>("freq" + id, "Band " + id + " Frequency", juce::NormalisableRange<float>(20.0f, 20000.0f, 0.01f, 0.25f), 1000.0f));
         layout.add(std::make_unique<juce::AudioParameterFloat>("gain" + id, "Band " + id + " Gain", -24.0f, 24.0f, 0.0f));
-        layout.add(std::make_unique<juce::AudioParameterFloat>("q" + id, "Band " + id + " Q", 0.1f, 20.0f, 0.01f, 0.35f, 0.707f));
+        layout.add(std::make_unique<juce::AudioParameterFloat>("q" + id, "Band " + id + " Q", juce::NormalisableRange<float>(0.1f, 20.0f, 0.01f, 0.35f), 0.707f));
     }
     return layout;
 }
@@ -28,4 +28,3 @@ juce::AudioProcessorEditor* LibrEQAudioProcessor::createEditor() { return new Li
 void LibrEQAudioProcessor::getStateInformation(juce::MemoryBlock& dest) { juce::MemoryOutputStream stream(dest, true); parameters.state.writeToStream(stream); }
 void LibrEQAudioProcessor::setStateInformation(const void* data, int size) { if (auto state = juce::ValueTree::readFromData(data, size); state.isValid()) parameters.replaceState(state); }
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new LibrEQAudioProcessor(); }
-
