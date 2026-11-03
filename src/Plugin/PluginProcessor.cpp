@@ -8,6 +8,7 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createLayout() {
         layout.add(std::make_unique<juce::AudioParameterFloat>("freq" + id, "Band " + id + " Frequency", juce::NormalisableRange<float>(20.0f, 20000.0f, 0.01f, 0.25f), 1000.0f));
         layout.add(std::make_unique<juce::AudioParameterFloat>("gain" + id, "Band " + id + " Gain", -24.0f, 24.0f, 0.0f));
         layout.add(std::make_unique<juce::AudioParameterFloat>("q" + id, "Band " + id + " Q", juce::NormalisableRange<float>(0.1f, 20.0f, 0.01f, 0.35f), 0.707f));
+        layout.add(std::make_unique<juce::AudioParameterChoice>("type" + id, "Band " + id + " Type", juce::StringArray { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Notch" }, 0));
     }
     return layout;
 }
@@ -23,7 +24,7 @@ void LibrEQAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
     for (int i = 0; i < 8; ++i) {
         const auto id = juce::String(i + 1);
         arielo::Band band;
-        band.type = arielo::FilterType::Bell;
+        band.type = static_cast<arielo::FilterType>((int) parameters.getRawParameterValue("type" + id)->load());
         band.frequency = parameters.getRawParameterValue("freq" + id)->load();
         band.gainDb = parameters.getRawParameterValue("gain" + id)->load();
         band.q = parameters.getRawParameterValue("q" + id)->load();
