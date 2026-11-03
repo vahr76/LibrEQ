@@ -24,7 +24,8 @@ void LibrEQAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
     for (int i = 0; i < 8; ++i) {
         const auto id = juce::String(i + 1);
         arielo::Band band;
-        band.type = static_cast<arielo::FilterType>((int) parameters.getRawParameterValue("type" + id)->load());
+        const int typeIndex = juce::jlimit(0, 5, juce::roundToInt(parameters.getRawParameterValue("type" + id)->load() * 5.0f));
+        band.type = static_cast<arielo::FilterType>(typeIndex);
         band.frequency = parameters.getRawParameterValue("freq" + id)->load();
         band.gainDb = parameters.getRawParameterValue("gain" + id)->load();
         band.q = parameters.getRawParameterValue("q" + id)->load();
