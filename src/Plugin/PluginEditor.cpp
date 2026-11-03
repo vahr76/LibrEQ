@@ -59,17 +59,26 @@ void LibrEQAudioProcessorEditor::paint(juce::Graphics& g) {
     g.setColour(juce::Colour(0xff8d98a5));
     g.drawText("Open equalization for everyone", 25, 48, 240, 22, juce::Justification::left);
     auto graph = getLocalBounds().reduced(24).withTop(88).withBottom(getHeight() - 78);
-    g.setColour(juce::Colour(0xff20252d));
+    g.setColour(juce::Colour(0xff1b2028));
     g.fillRoundedRectangle(graph.toFloat(), 8.0f);
+    g.setColour(juce::Colour(0x1816dec0));
+    g.fillRoundedRectangle(graph.reduced(1).toFloat(), 8.0f);
     g.setColour(juce::Colour(0xff343b46));
-    for (int i = 0; i <= 8; ++i) g.drawHorizontalLine(graph.getY() + i * graph.getHeight() / 8, (float)graph.getX(), (float)graph.getRight());
-    for (int i = 0; i <= 10; ++i) g.drawVerticalLine(graph.getX() + i * graph.getWidth() / 10, (float)graph.getY(), (float)graph.getBottom());
+    for (int i = 0; i <= 8; ++i) {
+        g.setColour(i == 4 ? juce::Colour(0xff4b5865) : juce::Colour(0xff303945));
+        g.drawHorizontalLine(graph.getY() + i * graph.getHeight() / 8, (float)graph.getX(), (float)graph.getRight());
+    }
+    for (int i = 0; i <= 10; ++i) {
+        g.setColour(juce::Colour(0xff2b333e));
+        g.drawVerticalLine(graph.getX() + i * graph.getWidth() / 10, (float)graph.getY(), (float)graph.getBottom());
+    }
     g.setColour(juce::Colour(0xff8994a1));
     g.setFont(juce::FontOptions(11.0f));
     for (int i = 0; i <= 8; ++i) { const auto db = 24 - i * 6; g.drawText(juce::String(db) + " dB", graph.getX() + 8, graph.getY() + i * graph.getHeight() / 8 - 8, 60, 16, juce::Justification::left); }
     const float freqs[] = { 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000 };
     for (float f : freqs) g.drawText(juce::String((int)f) + " Hz", (int)frequencyToX(f) - 24, graph.getBottom() - 24, 52, 16, juce::Justification::centred);
     juce::Path curve;
+    juce::Path curveFill;
     curve.startNewSubPath((float)graph.getX(), gainToY(0.0f));
     for (int px = 0; px <= graph.getWidth(); px += 4) {
         const float f = xToFrequency((float)(graph.getX() + px));
@@ -91,6 +100,13 @@ void LibrEQAudioProcessorEditor::paint(juce::Graphics& g) {
         }
         curve.lineTo((float)(graph.getX() + px), gainToY(juce::jlimit(-24.0f, 24.0f, db)));
     }
+    curveFill = curve;
+    curveFill.lineTo((float)graph.getRight(), gainToY(0.0f));
+    curveFill.closeSubPath();
+    g.setColour(juce::Colour(0x2458d6bd));
+    g.fillPath(curveFill);
+    g.setColour(juce::Colour(0x3558d6bd));
+    g.strokePath(curve, juce::PathStrokeType(6.0f));
     g.setColour(juce::Colour(0xff58d6bd));
     g.strokePath(curve, juce::PathStrokeType(2.4f));
     g.setColour(juce::Colour(0xff58d6bd));
@@ -98,10 +114,23 @@ void LibrEQAudioProcessorEditor::paint(juce::Graphics& g) {
         const auto* freq = processor.parameters.getRawParameterValue("freq" + juce::String(i + 1));
         const auto* gain = processor.parameters.getRawParameterValue("gain" + juce::String(i + 1));
         const float x = frequencyToX(freq->load()), y = gainToY(gain->load());
-        g.setColour(i == selectedBand ? juce::Colour(0xffffffff) : juce::Colour(0xff58d6bd));
+        if (i == selectedBand) {
+            g.setColour(juce::Colour(0x4058d6bd));
+            g.fillEllipse(x - 14.0f, y - 14.0f, 28.0f, 28.0f);
+            g.setColour(juce::Colour(0xfff5fffc));
+            g.drawEllipse(x - 9.0f, y - 9.0f, 18.0f, 18.0f, 2.0f);
+        }
+        g.setColour(i == selectedBand ? juce::Colour(0xff58d6bd) : juce::Colour(0xff8be6d3));
         g.fillEllipse(x - 6.0f, y - 6.0f, 12.0f, 12.0f);
         g.setColour(juce::Colour(0xff121419));
         g.drawText(juce::String(i + 1), (int)x - 5, (int)y - 7, 10, 14, juce::Justification::centred);
+        if (i == selectedBand) {
+            const auto freqText = juce::String(freq->load(), 0) + " Hz";
+            const auto gainText = juce::String(gain->load(), 1) + " dB";
+            g.setColour(juce::Colour(0xffdce9e7));
+            g.setFont(juce::FontOptions(11.0f));
+            g.drawText(freqText + "  " + gainText, (int)x - 58, (int)y - 30, 116, 16, juce::Justification::centred);
+        }
     }
 }
 
