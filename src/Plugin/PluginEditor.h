@@ -3,14 +3,16 @@
 
 class LibrEQAudioProcessorEditor final : public juce::AudioProcessorEditor {
 public:
-    explicit LibrEQAudioProcessorEditor(LibrEQAudioProcessor& p) : AudioProcessorEditor(p), processor(p) { setSize(960, 560); }
+    explicit LibrEQAudioProcessorEditor(LibrEQAudioProcessor& p);
     void paint(juce::Graphics&) override;
-    void resized() override {}
+    void resized() override;
     void mouseDown(const juce::MouseEvent&) override;
     void mouseDrag(const juce::MouseEvent&) override;
 private:
     LibrEQAudioProcessor& processor;
     int selectedBand{-1};
+    juce::ComboBox typeBox;
+    juce::Label bandLabel;
     juce::Rectangle<int> graphBounds() const;
     float xToFrequency(float) const;
     float frequencyToX(float) const;

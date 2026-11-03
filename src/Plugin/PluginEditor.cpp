@@ -1,5 +1,29 @@
 #include "PluginEditor.h"
 
+LibrEQAudioProcessorEditor::LibrEQAudioProcessorEditor(LibrEQAudioProcessor& p) : AudioProcessorEditor(p), processor(p) {
+    setSize(960, 560);
+    typeBox.addItemList(juce::StringArray { "Bell", "Low Shelf", "High Shelf", "High Pass", "Low Pass", "Notch" }, 1);
+    typeBox.setSelectedId(1);
+    typeBox.onChange = [this] {
+        if (selectedBand >= 0) {
+            auto* parameter = processor.parameters.getParameter("type" + juce::String(selectedBand + 1));
+            if (parameter != nullptr) parameter->setValueNotifyingHost(parameter->convertTo0to1((float) typeBox.getSelectedItemIndex()));
+        }
+        repaint();
+    };
+    addAndMakeVisible(typeBox);
+    bandLabel.setText("Band 1  ·  Bell", juce::dontSendNotification);
+    bandLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd7e2e8));
+    bandLabel.setFont(juce::FontOptions(14.0f));
+    addAndMakeVisible(bandLabel);
+    selectedBand = 0;
+}
+
+void LibrEQAudioProcessorEditor::resized() {
+    typeBox.setBounds(getWidth() - 220, 22, 190, 30);
+    bandLabel.setBounds(getWidth() - 440, 22, 200, 30);
+}
+
 void LibrEQAudioProcessorEditor::paint(juce::Graphics& g) {
     g.fillAll(juce::Colour(0xff121419));
     g.setColour(juce::Colour(0xffe8edf2));
@@ -51,5 +75,5 @@ float LibrEQAudioProcessorEditor::frequencyToX(float f) const { auto r = graphBo
 float LibrEQAudioProcessorEditor::xToFrequency(float x) const { auto r = graphBounds(); return std::pow(10.0f, juce::jmap(juce::jlimit((float)r.getX(), (float)r.getRight(), x), (float)r.getX(), (float)r.getRight(), std::log10(20.0f), std::log10(20000.0f))); }
 float LibrEQAudioProcessorEditor::gainToY(float db) const { auto r = graphBounds(); return juce::jmap(juce::jlimit(-24.0f, 24.0f, db), 24.0f, -24.0f, (float)r.getY(), (float)r.getBottom()); }
 float LibrEQAudioProcessorEditor::yToGain(float y) const { auto r = graphBounds(); return juce::jmap(juce::jlimit((float)r.getY(), (float)r.getBottom(), y), (float)r.getY(), (float)r.getBottom(), 24.0f, -24.0f); }
-void LibrEQAudioProcessorEditor::mouseDown(const juce::MouseEvent& e) { selectedBand = -1; float nearest = 16.0f; for (int i = 0; i < 8; ++i) { const auto* f = processor.parameters.getRawParameterValue("freq" + juce::String(i + 1)); const auto* g = processor.parameters.getRawParameterValue("gain" + juce::String(i + 1)); const float d = e.position.getDistanceFrom({frequencyToX(f->load()), gainToY(g->load())}); if (d < nearest) { nearest = d; selectedBand = i; } } repaint(); }
+void LibrEQAudioProcessorEditor::mouseDown(const juce::MouseEvent& e) { selectedBand = -1; float nearest = 16.0f; for (int i = 0; i < 8; ++i) { const auto* f = processor.parameters.getRawParameterValue("freq" + juce::String(i + 1)); const auto* g = processor.parameters.getRawParameterValue("gain" + juce::String(i + 1)); const float d = e.position.getDistanceFrom({frequencyToX(f->load()), gainToY(g->load())}); if (d < nearest) { nearest = d; selectedBand = i; } } if (selectedBand >= 0) { const int type = (int) processor.parameters.getRawParameterValue("type" + juce::String(selectedBand + 1))->load(); typeBox.setSelectedItemIndex(type, juce::dontSendNotification); bandLabel.setText("Band " + juce::String(selectedBand + 1) + "  ·  " + typeBox.getItemText(type + 1), juce::dontSendNotification); } repaint(); }
 void LibrEQAudioProcessorEditor::mouseDrag(const juce::MouseEvent& e) { if (selectedBand < 0) return; const auto id = juce::String(selectedBand + 1); auto* f = processor.parameters.getParameter("freq" + id); auto* g = processor.parameters.getParameter("gain" + id); f->setValueNotifyingHost(f->convertTo0to1(xToFrequency(e.position.x))); g->setValueNotifyingHost(g->convertTo0to1(yToGain(e.position.y))); repaint(); }
