@@ -16,12 +16,37 @@ LibrEQAudioProcessorEditor::LibrEQAudioProcessorEditor(LibrEQAudioProcessor& p) 
     bandLabel.setColour(juce::Label::textColourId, juce::Colour(0xffd7e2e8));
     bandLabel.setFont(juce::FontOptions(14.0f));
     addAndMakeVisible(bandLabel);
+    auto setupSlider = [this](juce::Slider& slider, juce::Label& label, const juce::String& text) {
+        slider.setSliderStyle(juce::Slider::LinearHorizontal);
+        slider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 76, 22);
+        slider.setColour(juce::Slider::thumbColourId, juce::Colour(0xff58d6bd));
+        slider.setColour(juce::Slider::trackColourId, juce::Colour(0xff52616d));
+        label.setText(text, juce::dontSendNotification);
+        label.setColour(juce::Label::textColourId, juce::Colour(0xff9eabb5));
+        addAndMakeVisible(slider); addAndMakeVisible(label);
+    };
+    setupSlider(frequencySlider, frequencyLabel, "Frequency");
+    setupSlider(gainSlider, gainLabel, "Gain");
+    setupSlider(qSlider, qLabel, "Q");
     selectedBand = 0;
+    bindSelectedBand();
 }
 
 void LibrEQAudioProcessorEditor::resized() {
     typeBox.setBounds(getWidth() - 220, 22, 190, 30);
     bandLabel.setBounds(getWidth() - 440, 22, 200, 30);
+    const int y = getHeight() - 50, width = (getWidth() - 72) / 3;
+    frequencyLabel.setBounds(24, y, 78, 22); frequencySlider.setBounds(100, y, width - 78, 22);
+    gainLabel.setBounds(24 + width, y, 54, 22); gainSlider.setBounds(78 + width, y, width - 54, 22);
+    qLabel.setBounds(24 + width * 2, y, 30, 22); qSlider.setBounds(54 + width * 2, y, width - 30, 22);
+}
+
+void LibrEQAudioProcessorEditor::bindSelectedBand() {
+    if (selectedBand < 0) return;
+    const auto id = juce::String(selectedBand + 1);
+    frequencyAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.parameters, "freq" + id, frequencySlider);
+    gainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.parameters, "gain" + id, gainSlider);
+    qAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(processor.parameters, "q" + id, qSlider);
 }
 
 void LibrEQAudioProcessorEditor::paint(juce::Graphics& g) {
@@ -32,7 +57,7 @@ void LibrEQAudioProcessorEditor::paint(juce::Graphics& g) {
     g.setFont(juce::FontOptions(13.0f));
     g.setColour(juce::Colour(0xff8d98a5));
     g.drawText("Open equalization for everyone", 25, 48, 240, 22, juce::Justification::left);
-    auto graph = getLocalBounds().reduced(24).withTop(88).withBottom(getHeight() - 56);
+    auto graph = getLocalBounds().reduced(24).withTop(88).withBottom(getHeight() - 78);
     g.setColour(juce::Colour(0xff20252d));
     g.fillRoundedRectangle(graph.toFloat(), 8.0f);
     g.setColour(juce::Colour(0xff343b46));
@@ -79,10 +104,10 @@ void LibrEQAudioProcessorEditor::paint(juce::Graphics& g) {
     }
 }
 
-juce::Rectangle<int> LibrEQAudioProcessorEditor::graphBounds() const { return getLocalBounds().reduced(24).withTop(88).withBottom(getHeight() - 56); }
+juce::Rectangle<int> LibrEQAudioProcessorEditor::graphBounds() const { return getLocalBounds().reduced(24).withTop(88).withBottom(getHeight() - 78); }
 float LibrEQAudioProcessorEditor::frequencyToX(float f) const { auto r = graphBounds(); return (float)r.getX() + juce::jmap(std::log10(juce::jlimit(20.0f, 20000.0f, f)), std::log10(20.0f), std::log10(20000.0f), 0.0f, (float)r.getWidth()); }
 float LibrEQAudioProcessorEditor::xToFrequency(float x) const { auto r = graphBounds(); return std::pow(10.0f, juce::jmap(juce::jlimit((float)r.getX(), (float)r.getRight(), x), (float)r.getX(), (float)r.getRight(), std::log10(20.0f), std::log10(20000.0f))); }
 float LibrEQAudioProcessorEditor::gainToY(float db) const { auto r = graphBounds(); return juce::jmap(juce::jlimit(-24.0f, 24.0f, db), 24.0f, -24.0f, (float)r.getY(), (float)r.getBottom()); }
 float LibrEQAudioProcessorEditor::yToGain(float y) const { auto r = graphBounds(); return juce::jmap(juce::jlimit((float)r.getY(), (float)r.getBottom(), y), (float)r.getY(), (float)r.getBottom(), 24.0f, -24.0f); }
-void LibrEQAudioProcessorEditor::mouseDown(const juce::MouseEvent& e) { selectedBand = -1; float nearest = 16.0f; for (int i = 0; i < 8; ++i) { const auto* f = processor.parameters.getRawParameterValue("freq" + juce::String(i + 1)); const auto* g = processor.parameters.getRawParameterValue("gain" + juce::String(i + 1)); const float d = e.position.getDistanceFrom({frequencyToX(f->load()), gainToY(g->load())}); if (d < nearest) { nearest = d; selectedBand = i; } } if (selectedBand >= 0) { const int type = juce::jlimit(0, 5, juce::roundToInt(processor.parameters.getRawParameterValue("type" + juce::String(selectedBand + 1))->load() * 5.0f)); typeBox.setSelectedItemIndex(type, juce::dontSendNotification); bandLabel.setText("Band " + juce::String(selectedBand + 1) + "  ·  " + typeBox.getItemText(type + 1), juce::dontSendNotification); } repaint(); }
+void LibrEQAudioProcessorEditor::mouseDown(const juce::MouseEvent& e) { selectedBand = -1; float nearest = 16.0f; for (int i = 0; i < 8; ++i) { const auto* f = processor.parameters.getRawParameterValue("freq" + juce::String(i + 1)); const auto* g = processor.parameters.getRawParameterValue("gain" + juce::String(i + 1)); const float d = e.position.getDistanceFrom({frequencyToX(f->load()), gainToY(g->load())}); if (d < nearest) { nearest = d; selectedBand = i; } } if (selectedBand >= 0) { const int type = juce::jlimit(0, 5, juce::roundToInt(processor.parameters.getRawParameterValue("type" + juce::String(selectedBand + 1))->load() * 5.0f)); typeBox.setSelectedItemIndex(type, juce::dontSendNotification); bandLabel.setText("Band " + juce::String(selectedBand + 1) + "  ·  " + typeBox.getItemText(type + 1), juce::dontSendNotification); bindSelectedBand(); } repaint(); }
 void LibrEQAudioProcessorEditor::mouseDrag(const juce::MouseEvent& e) { if (selectedBand < 0) return; const auto id = juce::String(selectedBand + 1); auto* f = processor.parameters.getParameter("freq" + id); auto* g = processor.parameters.getParameter("gain" + id); f->setValueNotifyingHost(f->convertTo0to1(xToFrequency(e.position.x))); g->setValueNotifyingHost(g->convertTo0to1(yToGain(e.position.y))); repaint(); }

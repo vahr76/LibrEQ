@@ -13,6 +13,10 @@ private:
     int selectedBand{-1};
     juce::ComboBox typeBox;
     juce::Label bandLabel;
+    juce::Slider frequencySlider, gainSlider, qSlider;
+    juce::Label frequencyLabel, gainLabel, qLabel;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> frequencyAttachment, gainAttachment, qAttachment;
+    void bindSelectedBand();
     juce::Rectangle<int> graphBounds() const;
     float xToFrequency(float) const;
     float frequencyToX(float) const;
