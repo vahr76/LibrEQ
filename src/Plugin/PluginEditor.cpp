@@ -51,8 +51,17 @@ void LibrEQAudioProcessorEditor::paint(juce::Graphics& g) {
         for (int band = 0; band < 8; ++band) {
             const auto* gain = processor.parameters.getRawParameterValue("gain" + juce::String(band + 1));
             const auto* freq = processor.parameters.getRawParameterValue("freq" + juce::String(band + 1));
+            const auto* type = processor.parameters.getRawParameterValue("type" + juce::String(band + 1));
             const float distance = std::log2(std::max(20.0f, f) / std::max(20.0f, freq->load()));
-            db += gain->load() * std::exp(-distance * distance * 5.0f);
+            const float shape = std::exp(-distance * distance * 5.0f);
+            switch ((int) type->load()) {
+                case 1: db += gain->load() * (1.0f - std::tanh(distance * 4.0f)) * 0.5f; break;
+                case 2: db += gain->load() * (1.0f + std::tanh(distance * 4.0f)) * 0.5f; break;
+                case 3: db += (f < freq->load() ? -18.0f : 0.0f); break;
+                case 4: db += (f > freq->load() ? -18.0f : 0.0f); break;
+                case 5: db += -std::abs(gain->load()) * shape; break;
+                default: db += gain->load() * shape; break;
+            }
         }
         curve.lineTo((float)(graph.getX() + px), gainToY(juce::jlimit(-24.0f, 24.0f, db)));
     }
