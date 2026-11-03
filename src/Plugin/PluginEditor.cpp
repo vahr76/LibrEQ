@@ -8,6 +8,7 @@ LibrEQAudioProcessorEditor::LibrEQAudioProcessorEditor(LibrEQAudioProcessor& p) 
         if (selectedBand >= 0) {
             auto* parameter = processor.parameters.getParameter("type" + juce::String(selectedBand + 1));
             if (parameter != nullptr) parameter->setValueNotifyingHost(parameter->convertTo0to1((float) typeBox.getSelectedItemIndex()));
+            bandLabel.setText("Band " + juce::String(selectedBand + 1) + "  ·  " + typeBox.getText(), juce::dontSendNotification);
         }
         repaint();
     };
@@ -84,7 +85,7 @@ void LibrEQAudioProcessorEditor::paint(juce::Graphics& g) {
                 case 2: db += gain->load() * (1.0f + std::tanh(distance * 4.0f)) * 0.5f; break;
                 case 3: db += (f < freq->load() ? -18.0f : 0.0f); break;
                 case 4: db += (f > freq->load() ? -18.0f : 0.0f); break;
-                case 5: db += -std::abs(gain->load()) * shape; break;
+                case 5: db += -18.0f * shape; break;
                 default: db += gain->load() * shape; break;
             }
         }
