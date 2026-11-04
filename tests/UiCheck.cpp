@@ -126,6 +126,38 @@ int main(int argc, char** argv) {
             const double peakHz = std::distance(db.begin(), peak) * 48000.0 / libreq::SpectrumTap::fftSize;
             check("analyzer finds the right frequency", std::abs(peakHz - 1500.0) < 12.0);
             check("analyzer level is calibrated", std::abs(*peak) < 1.5f);
+
+            const double binWidth = 48000.0 / libreq::SpectrumTap::fftSize;
+            std::vector<double> frequencies(1000);
+            for (size_t i = 0; i < frequencies.size(); ++i)
+                frequencies[i] = 20.0 * std::pow(1000.0, static_cast<double>(i) / 999.0);
+            std::vector<float> display;
+            libreq::renderSpectrumDisplay(db, binWidth, frequencies, display);
+            const auto displayPeak = std::max_element(display.begin(), display.end());
+            const double displayHz = frequencies[static_cast<size_t>(std::distance(display.begin(), displayPeak))];
+            check("smoothed display keeps a tone at its frequency", std::abs(std::log2(displayHz / 1500.0)) < 0.02);
+            std::printf("     tone peak on display %.2f dB\n", static_cast<double>(*displayPeak));
+            check("smoothed display keeps tone level within 12 dB", *displayPeak > -12.0f);
+
+            // White noise: the display must be far less jagged than the raw bins resampled to pixels.
+            juce::Random noiseSource(7);
+            for (int i = 0; i < b.getNumSamples(); ++i)
+                b.setSample(0, i, noiseSource.nextFloat() * 0.5f - 0.25f);
+            tap.push(b.getArrayOfReadPointers(), 1, b.getNumSamples());
+            tap.compute(db);
+            libreq::renderSpectrumDisplay(db, binWidth, frequencies, display);
+            const auto roughness = [](const std::vector<float>& v) {
+                double sum = 0.0;
+                for (size_t i = 2; i < v.size(); ++i)
+                    sum += std::abs(static_cast<double>(v[i]) - 2.0 * v[i - 1] + v[i - 2]);
+                return sum / static_cast<double>(v.size());
+            };
+            std::vector<float> rawPixels(frequencies.size());
+            for (size_t i = 0; i < frequencies.size(); ++i)
+                rawPixels[i] = db[juce::jmin(db.size() - 1, static_cast<size_t>(frequencies[i] / binWidth))];
+            const double before = roughness(rawPixels), after = roughness(display);
+            std::printf("     roughness raw %.3f, display %.3f\n", before, after);
+            check("noise display is at least 20x smoother than raw bins", after * 20.0 < before);
         }
 
         graph.setSelected(3);

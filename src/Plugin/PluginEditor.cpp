@@ -313,41 +313,61 @@ void EqGraph::updateSpectrum(libreq::SpectrumTap& tap, std::vector<float>& smoot
     if (smoothed.size() != static_cast<size_t>(width))
         smoothed.assign(static_cast<size_t>(width), spectrumBottom);
 
-    const double rate = processor.currentSampleRate();
-    const double binWidth = rate / libreq::SpectrumTap::fftSize;
-    const int lastBin = static_cast<int>(scratch.size()) - 1;
+    std::vector<double> frequencies(static_cast<size_t>(width));
+    for (int px = 0; px < width; ++px)
+        frequencies[static_cast<size_t>(px)] = static_cast<double>(xToFrequency(r.getX() + static_cast<float>(px)));
+
+    std::vector<float> display;
+    libreq::renderSpectrumDisplay(scratch, processor.currentSampleRate() / libreq::SpectrumTap::fftSize, frequencies, display);
 
     for (int px = 0; px < width; ++px) {
-        const auto frequency = static_cast<double>(xToFrequency(r.getX() + static_cast<float>(px)));
-        const auto nextFrequency = static_cast<double>(xToFrequency(r.getX() + static_cast<float>(px + 1)));
-        const double first = frequency / binWidth, last = nextFrequency / binWidth;
-        float db;
-        if (last - first < 1.0) {
-            // Low frequencies span less than one bin per pixel: interpolate.
-            const int bin = juce::jlimit(0, lastBin - 1, static_cast<int>(first));
-            const auto t = static_cast<float>(first - bin);
-            db = scratch[static_cast<size_t>(bin)] * (1.0f - t) + scratch[static_cast<size_t>(bin + 1)] * t;
-        } else {
-            db = -140.0f;
-            for (int bin = static_cast<int>(first); bin <= juce::jmin(lastBin, static_cast<int>(last)); ++bin)
-                db = juce::jmax(db, scratch[static_cast<size_t>(bin)]);
-        }
-        db += spectrumTiltPerOctave * static_cast<float>(std::log2(frequency / 1000.0));
-
+        const float db = display[static_cast<size_t>(px)]
+                         + spectrumTiltPerOctave * static_cast<float>(std::log2(frequencies[static_cast<size_t>(px)] / 1000.0));
         auto& value = smoothed[static_cast<size_t>(px)];
-        value = db > value ? value + (db - value) * 0.65f : value + (db - value) * 0.18f;
+        value += (db - value) * (db > value ? 0.45f : 0.12f);
     }
 }
 
-juce::Path EqGraph::spectrumPath(const std::vector<float>& smoothed) const {
+juce::Path EqGraph::spectrumCurve(const std::vector<float>& smoothed) const {
     const auto r = plot();
+    constexpr int step = 5;
+    const int count = static_cast<int>(smoothed.size());
+    const auto point = [&](int px) {
+        const int clamped = juce::jlimit(0, count - 1, px);
+        const auto y = juce::jmin(r.getBottom() + 8.0f, dbToSpectrumY(smoothed[static_cast<size_t>(clamped)]));
+        return juce::Point<float>(r.getX() + static_cast<float>(clamped), y);
+    };
+
+    // Catmull-Rom spline written as cubic Bezier segments.
     juce::Path path;
-    path.startNewSubPath(r.getX(), r.getBottom());
-    for (size_t px = 0; px < smoothed.size(); ++px)
-        path.lineTo(r.getX() + static_cast<float>(px), juce::jmin(r.getBottom(), dbToSpectrumY(smoothed[px])));
-    path.lineTo(r.getRight(), r.getBottom());
-    path.closeSubPath();
+    path.startNewSubPath(point(0));
+    for (int px = 0; px < count - 1; px += step) {
+        const auto p0 = point(px - step), p1 = point(px), p2 = point(px + step), p3 = point(px + 2 * step);
+        path.cubicTo(p1 + (p2 - p0) / 6.0f, p2 - (p3 - p1) / 6.0f, p2);
+    }
     return path;
+}
+
+void EqGraph::drawSpectrum(juce::Graphics& g, const std::vector<float>& smoothed, juce::Colour colour, float fillAlpha, float lineAlpha, float lineWidth) const {
+    const auto r = plot();
+    const auto curve = spectrumCurve(smoothed);
+    const auto fade = [&](float alpha) {
+        // Bright near the top of the plot, fading to nothing at the bottom.
+        juce::ColourGradient gradient(colour.withAlpha(alpha), r.getTopLeft(), colour.withAlpha(0.0f), r.getBottomLeft(), false);
+        gradient.addColour(0.55, colour.withAlpha(alpha * 0.45f));
+        gradient.addColour(0.82, colour.withAlpha(alpha * 0.1f));
+        return gradient;
+    };
+
+    juce::Path fill(curve);
+    fill.lineTo(r.getRight(), r.getBottom() + 8.0f);
+    fill.lineTo(r.getX(), r.getBottom() + 8.0f);
+    fill.closeSubPath();
+    g.setGradientFill(fade(fillAlpha));
+    g.fillPath(fill);
+
+    g.setGradientFill(fade(lineAlpha));
+    g.strokePath(curve, juce::PathStrokeType(lineWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
 void EqGraph::refresh() {
@@ -416,20 +436,10 @@ void EqGraph::paint(juce::Graphics& g) {
     }
 
     if (analyzerVisible) {
-        if (! preSmoothed.empty()) {
-            g.setColour(colours::preSpectrum.withAlpha(0.28f));
-            g.fillPath(spectrumPath(preSmoothed));
-            auto path = spectrumPath(preSmoothed);
-            g.setColour(colours::preSpectrum.withAlpha(0.72f));
-            g.strokePath(path, juce::PathStrokeType(1.0f));
-        }
-        if (! postSmoothed.empty()) {
-            const auto path = spectrumPath(postSmoothed);
-            g.setColour(colours::postSpectrum.withAlpha(0.32f));
-            g.fillPath(path);
-            g.setColour(colours::postSpectrum.withAlpha(0.9f));
-            g.strokePath(path, juce::PathStrokeType(1.35f));
-        }
+        if (! preSmoothed.empty())
+            drawSpectrum(g, preSmoothed, colours::preSpectrum.brighter(0.5f), 0.34f, 0.8f, 1.0f);
+        if (! postSmoothed.empty())
+            drawSpectrum(g, postSmoothed, colours::postSpectrum.brighter(0.35f), 0.62f, 1.0f, 1.4f);
         g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
         g.setColour(colours::textDim);
         g.drawText("SPECTRUM", r.getX() + 12.0f, r.getY() + 10.0f, 70.0f, 14.0f, juce::Justification::left);
