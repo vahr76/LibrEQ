@@ -397,7 +397,8 @@ void EqGraph::refresh() {
 void EqGraph::paint(juce::Graphics& g) {
     g.fillAll(colours::window);
     const auto r = plot();
-    g.setColour(colours::plot);
+    g.setGradientFill(juce::ColourGradient(colours::plot.brighter(0.08f), r.getTopLeft(),
+                                           colours::plot.darker(0.18f), r.getBottomLeft(), false));
     g.fillRect(r);
     g.saveState();
     g.reduceClipRegion(r.toNearestInt());
@@ -418,14 +419,29 @@ void EqGraph::paint(juce::Graphics& g) {
         if (! preSmoothed.empty()) {
             g.setColour(colours::preSpectrum.withAlpha(0.28f));
             g.fillPath(spectrumPath(preSmoothed));
+            auto path = spectrumPath(preSmoothed);
+            g.setColour(colours::preSpectrum.withAlpha(0.72f));
+            g.strokePath(path, juce::PathStrokeType(1.0f));
         }
         if (! postSmoothed.empty()) {
             const auto path = spectrumPath(postSmoothed);
             g.setColour(colours::postSpectrum.withAlpha(0.32f));
             g.fillPath(path);
-            g.setColour(colours::postSpectrum.withAlpha(0.75f));
-            g.strokePath(path, juce::PathStrokeType(1.0f));
+            g.setColour(colours::postSpectrum.withAlpha(0.9f));
+            g.strokePath(path, juce::PathStrokeType(1.35f));
         }
+        g.setFont(juce::FontOptions(10.0f, juce::Font::bold));
+        g.setColour(colours::textDim);
+        g.drawText("SPECTRUM", r.getX() + 12.0f, r.getY() + 10.0f, 70.0f, 14.0f, juce::Justification::left);
+        g.setColour(colours::preSpectrum);
+        g.fillEllipse(r.getX() + 84.0f, r.getY() + 14.0f, 6.0f, 6.0f);
+        g.setColour(colours::textDim);
+        g.setFont(juce::FontOptions(10.0f));
+        g.drawText("IN", r.getX() + 94.0f, r.getY() + 10.0f, 18.0f, 14.0f, juce::Justification::left);
+        g.setColour(colours::postSpectrum);
+        g.fillEllipse(r.getX() + 118.0f, r.getY() + 14.0f, 6.0f, 6.0f);
+        g.setColour(colours::textDim);
+        g.drawText("OUT", r.getX() + 128.0f, r.getY() + 10.0f, 28.0f, 14.0f, juce::Justification::left);
     }
 
     const auto pathFor = [&](const std::vector<float>& curve) {
@@ -641,6 +657,8 @@ void LibrEQAudioProcessorEditor::updateStripVisibility() {
 
 void LibrEQAudioProcessorEditor::paint(juce::Graphics& g) {
     g.fillAll(colours::window);
+    g.setColour(colours::panelRaised.withAlpha(0.55f));
+    g.fillRect(0, 45, getWidth(), 1);
     g.setColour(colours::panel);
     g.fillRect(getLocalBounds().removeFromBottom(84));
     g.setColour(colours::text);
@@ -648,6 +666,9 @@ void LibrEQAudioProcessorEditor::paint(juce::Graphics& g) {
     g.drawText("Libr", 16, 0, 44, 46, juce::Justification::centredLeft);
     g.setColour(colours::accent);
     g.drawText("EQ", 51, 0, 40, 46, juce::Justification::centredLeft);
+    g.setColour(colours::textDim);
+    g.setFont(juce::FontOptions(10.0f));
+    g.drawText("OPEN EQUALIZATION FOR EVERYONE", 101, 17, 210, 14, juce::Justification::left);
 }
 
 void LibrEQAudioProcessorEditor::resized() {
