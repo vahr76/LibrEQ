@@ -216,7 +216,8 @@ int main(int argc, char** argv) {
 
         graph.mouseExit(mouseAt(graph, { 0.0f, 0.0f }));
         check("editor stays usable at minimum size", [&] { editor->setSize(760, 460); editor->refreshNow(); return graph.getWidth() > 0 && ! editor->createComponentSnapshot(editor->getLocalBounds()).isNull(); }());
-        editor->setSize(1040, 620);
+        editor->setSize(1160, 680);
+        processor.band(5).placement->setValueNotifyingHost(processor.band(5).placement->convertTo0to1(4.0f));
         graph.setSelected(3);
 
         // Feed pink-ish noise so the screenshot shows a live analyzer.
@@ -256,6 +257,257 @@ int main(int argc, char** argv) {
         }
         base.reset();
     }
+    // Features that live in the processor, on fresh instances.
+    {
+        const auto prepare = [](LibrEQAudioProcessor& p, int channels = 2) {
+            p.setPlayConfigDetails(channels, channels, 48000.0, 512);
+            p.prepareToPlay(48000.0, 512);
+        };
+        const auto gesture = [](juce::RangedAudioParameter* parameter, float plain) {
+            parameter->beginChangeGesture();
+            parameter->setValueNotifyingHost(parameter->convertTo0to1(plain));
+            parameter->endChangeGesture();
+        };
+        const auto bell = [&](LibrEQAudioProcessor& p, int i, float f, float g, float q) {
+            const auto& b = p.band(i);
+            gesture(b.type, 0.0f);
+            gesture(b.frequency, f);
+            gesture(b.gain, g);
+            gesture(b.q, q);
+            gesture(b.on, 1.0f);
+            gesture(b.used, 1.0f);
+        };
+
+        // Undo and redo.
+        {
+            LibrEQAudioProcessor p;
+            prepare(p);
+            check("history starts empty", ! p.canUndo() && ! p.canRedo());
+            bell(p, 0, 1000.0f, 6.0f, 1.0f);
+            p.flushHistory();
+            check("adding a band is one undo step", p.canUndo());
+            gesture(p.band(0).gain, -3.0f);
+            p.flushHistory();
+            p.undo();
+            check("undo restores the previous gain", std::abs(p.readBand(0).gainDb - 6.0f) < 0.02f);
+            p.redo();
+            check("redo restores the later gain", std::abs(p.readBand(0).gainDb + 3.0f) < 0.02f);
+            p.undo();
+            p.undo();
+            check("undo removes the band", ! p.isBandUsed(0));
+            check("undo stack ends empty", ! p.canUndo());
+        }
+
+        // A/B.
+        {
+            LibrEQAudioProcessor p;
+            prepare(p);
+            bell(p, 0, 1000.0f, 6.0f, 1.0f);
+            p.switchSlot(1);
+            check("B starts as a copy of A", std::abs(p.readBand(0).gainDb - 6.0f) < 0.02f && p.getActiveSlot() == 1);
+            gesture(p.band(0).gain, -9.0f);
+            p.switchSlot(0);
+            check("A keeps its value", std::abs(p.readBand(0).gainDb - 6.0f) < 0.02f);
+            p.switchSlot(1);
+            check("B keeps its value", std::abs(p.readBand(0).gainDb + 9.0f) < 0.02f);
+
+            juce::MemoryBlock state;
+            p.getStateInformation(state);
+            LibrEQAudioProcessor restored;
+            restored.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+            check("active slot is saved", restored.getActiveSlot() == 1 && std::abs(restored.readBand(0).gainDb + 9.0f) < 0.02f);
+            restored.switchSlot(0);
+            check("other slot is saved", std::abs(restored.readBand(0).gainDb - 6.0f) < 0.02f);
+
+            p.copyToOtherSlot();
+            p.switchSlot(0);
+            check("copy overwrites the other slot", std::abs(p.readBand(0).gainDb + 9.0f) < 0.02f);
+        }
+
+        // Presets.
+        {
+            LibrEQAudioProcessor p;
+            prepare(p);
+            const auto names = LibrEQAudioProcessor::getFactoryPresetNames();
+            check("factory presets exist", names.size() >= 5 && names[0] == "Init");
+            p.loadFactoryPreset(names.indexOf("Vocal Presence"));
+            check("factory preset loads bands", p.isBandUsed(3) && ! p.isBandUsed(4) && p.readBand(0).type == libreq::FilterType::HighPass);
+            check("preset name is reported", p.getPresetName() == "Vocal Presence");
+            p.undo();
+            check("a preset is one undo step", ! p.isBandUsed(0));
+
+            bell(p, 2, 700.0f, 4.5f, 2.0f);
+            juce::TemporaryFile temp(".librq");
+            check("user preset saves", p.savePreset(temp.getFile()));
+            p.loadFactoryPreset(0);
+            check("init clears the bands", ! p.isBandUsed(2));
+            check("user preset loads", p.loadPreset(temp.getFile()) && p.isBandUsed(2) && std::abs(p.readBand(2).gainDb - 4.5f) < 0.02f);
+            check("user preset rejects other files", ! p.loadPreset(juce::File("/nonexistent/none.librq")));
+        }
+
+        // Analyzer mode is stored with the project.
+        {
+            LibrEQAudioProcessor p;
+            p.analyzerMode.store(1);
+            juce::MemoryBlock state;
+            p.getStateInformation(state);
+            LibrEQAudioProcessor restored;
+            restored.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+            check("analyzer mode is saved", restored.analyzerMode.load() == 1);
+        }
+
+        // Global scale.
+        {
+            LibrEQAudioProcessor p;
+            prepare(p);
+            bell(p, 0, 1000.0f, 12.0f, 1.0f);
+            gesture(p.parameters.getParameter("scale"), 50.0f);
+            check("scale halves the band in the audio", std::abs(rmsDbAfter(p, 1000.0) - 6.0) < 0.1);
+            gesture(p.parameters.getParameter("scale"), 0.0f);
+            check("scale at zero is flat", std::abs(rmsDbAfter(p, 1000.0)) < 0.02);
+        }
+
+        // Auto gain.
+        {
+            LibrEQAudioProcessor p;
+            prepare(p);
+            bell(p, 0, 700.0f, 9.0f, 0.5f);
+            p.runBackgroundDesign(true);
+            const float comp = p.getAutoGainDb();
+            check("boosting gives negative auto gain", comp < -1.0f && comp > -9.0f);
+            gesture(p.parameters.getParameter("autogain"), 1.0f);
+            check("auto gain reaches the audio", std::abs(rmsDbAfter(p, 700.0) - (9.0 + static_cast<double>(comp))) < 0.15);
+            gesture(p.band(0).gain, -9.0f);
+            p.runBackgroundDesign(true);
+            check("cutting gives positive auto gain", p.getAutoGainDb() > 1.0f);
+        }
+
+        // Solo.
+        {
+            LibrEQAudioProcessor p;
+            prepare(p);
+            bell(p, 0, 1000.0f, 9.0f, 2.0f);
+            bell(p, 1, 100.0f, 12.0f, 1.0f);
+            p.soloBand.store(0);
+            check("solo passes the band at unity", std::abs(rmsDbAfter(p, 1000.0)) < 0.2);
+            check("solo removes other frequencies", rmsDbAfter(p, 100.0) < -20.0);
+            p.soloBand.store(-1);
+            check("leaving solo restores the curve", std::abs(rmsDbAfter(p, 1000.0) - 9.0) < 0.3);
+        }
+
+        // Bypass and mode changes must not click, in both modes.
+        for (bool linear : { false, true }) {
+            LibrEQAudioProcessor p;
+            gesture(p.getPhaseParameter(), linear ? 1.0f : 0.0f);
+            prepare(p);
+            check(linear ? "linear mode reports its latency" : "zero latency mode reports none", p.getLatencySamples() == (linear ? 4096 : 0));
+            bell(p, 0, 3000.0f, 6.0f, 1.0f);
+            p.runBackgroundDesign(true);
+
+            juce::AudioBuffer<float> buffer(2, 512);
+            juce::MidiBuffer midi;
+            double phase = 0.0;
+            const double step = juce::MathConstants<double>::twoPi * 200.0 / 48000.0;
+            float previous = 0.0f, worst = 0.0f;
+            bool finite = true;
+            const int toggleBlock = 100, restoreBlock = 180;
+            for (int b = 0; b < 300; ++b) {
+                if (b == toggleBlock) gesture(p.parameters.getParameter("bypass"), 1.0f);
+                if (b == restoreBlock) gesture(p.parameters.getParameter("bypass"), 0.0f);
+                for (int i = 0; i < 512; ++i) {
+                    const auto v = static_cast<float>(0.5 * std::sin(phase));
+                    phase += step;
+                    buffer.setSample(0, i, v);
+                    buffer.setSample(1, i, v);
+                }
+                p.processBlock(buffer, midi);
+                for (int i = 0; i < 512; ++i) {
+                    const float v = buffer.getSample(0, i);
+                    finite = finite && std::isfinite(v);
+                    if (b > 20) worst = juce::jmax(worst, std::abs(v - previous));
+                    previous = v;
+                }
+            }
+            const float sineSlope = static_cast<float>(0.5 * step);
+            std::printf("     %s bypass: largest step %.5f, sine slope %.5f\n", linear ? "linear" : "zero-latency", static_cast<double>(worst), static_cast<double>(sineSlope));
+            check("bypass does not click", finite && worst < sineSlope * 1.3f);
+        }
+
+        // Switching phase mode while playing.
+        {
+            LibrEQAudioProcessor p;
+            prepare(p);
+            bell(p, 0, 1000.0f, 6.0f, 1.0f);
+            check("zero latency level", std::abs(rmsDbAfter(p, 1000.0) - 6.0) < 0.1);
+            gesture(p.getPhaseParameter(), 1.0f);
+            p.runBackgroundDesign(true);
+            p.updateLatency();
+            check("switching reports the latency", p.getLatencySamples() == 4096);
+            check("linear phase level", std::abs(rmsDbAfter(p, 1000.0) - 6.0) < 0.2);
+            gesture(p.getPhaseParameter(), 0.0f);
+            p.updateLatency();
+            check("switching back removes the latency", p.getLatencySamples() == 0);
+            check("zero latency level returns", std::abs(rmsDbAfter(p, 1000.0) - 6.0) < 0.1);
+        }
+
+        // Mono through the whole processor.
+        {
+            LibrEQAudioProcessor p;
+            p.setPlayConfigDetails(1, 1, 48000.0, 512);
+            p.prepareToPlay(48000.0, 512);
+            bell(p, 0, 1000.0f, 6.0f, 1.0f);
+            juce::AudioBuffer<float> mono(1, 512);
+            juce::MidiBuffer midi;
+            double phase = 0.0, in = 0.0, out = 0.0;
+            for (int b = 0; b < 200; ++b) {
+                for (int i = 0; i < 512; ++i) {
+                    const auto v = static_cast<float>(0.25 * std::sin(phase));
+                    phase += juce::MathConstants<double>::twoPi * 1000.0 / 48000.0;
+                    mono.setSample(0, i, v);
+                    if (b > 100) in += static_cast<double>(v) * v;
+                }
+                p.processBlock(mono, midi);
+                if (b > 100) for (int i = 0; i < 512; ++i) out += static_cast<double>(mono.getSample(0, i)) * mono.getSample(0, i);
+            }
+            check("mono is processed", std::abs(10.0 * std::log10(out / in) - 6.0) < 0.1);
+        }
+
+        // Large host blocks must be split safely.
+        {
+            LibrEQAudioProcessor p;
+            prepare(p);
+            bell(p, 0, 1000.0f, 6.0f, 1.0f);
+            juce::AudioBuffer<float> large(2, 8192);
+            juce::MidiBuffer midi;
+            large.clear();
+            large.setSample(0, 0, 1.0f);
+            large.setSample(1, 0, 1.0f);
+            p.processBlock(large, midi);
+            check("large blocks stay finite", std::isfinite(large.getMagnitude(0, 8192)) && large.getMagnitude(0, 8192) > 0.5f);
+        }
+
+        // CPU, 24 active bands, one second of stereo audio.
+        for (bool linear : { false, true }) {
+            LibrEQAudioProcessor p;
+            gesture(p.getPhaseParameter(), linear ? 1.0f : 0.0f);
+            prepare(p);
+            for (int i = 0; i < LibrEQAudioProcessor::numBands; ++i)
+                bell(p, i, 40.0f * std::pow(1.28f, static_cast<float>(i)), i % 2 ? 2.0f : -2.0f, 1.0f);
+            p.runBackgroundDesign(true);
+            juce::AudioBuffer<float> buffer(2, 512);
+            juce::MidiBuffer midi;
+            juce::Random random(3);
+            const auto start = juce::Time::getMillisecondCounterHiRes();
+            int blocks = static_cast<int>(10.0 * 48000.0 / 512.0);
+            for (int b = 0; b < blocks; ++b) {
+                for (int i = 0; i < 512; ++i) { const float v = random.nextFloat() * 0.2f - 0.1f; buffer.setSample(0, i, v); buffer.setSample(1, i, v); }
+                p.processBlock(buffer, midi);
+            }
+            const auto elapsed = juce::Time::getMillisecondCounterHiRes() - start;
+            std::printf("     CPU %s, 24 bands: %.2f%% of one core\n", linear ? "linear" : "zero-latency", elapsed / 100.0);
+        }
+    }
+
     std::printf(failures == 0 ? "\nAll UI checks passed\n" : "\n%d UI checks FAILED\n", failures);
     return failures == 0 ? 0 : 1;
 }

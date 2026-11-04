@@ -3,7 +3,7 @@ project(LibrEQ VERSION 0.2.0 LANGUAGES C CXX)
 include(CTest)
 include(FetchContent)
 
-add_executable(LibrEQDspTests tests/DspTests.cpp src/DSP/Equalizer.cpp)
+add_executable(LibrEQDspTests tests/DspTests.cpp src/DSP/Equalizer.cpp src/DSP/LinearPhase.cpp)
 target_include_directories(LibrEQDspTests PRIVATE src)
 target_compile_features(LibrEQDspTests PRIVATE cxx_std_20)
 add_test(NAME dsp COMMAND LibrEQDspTests)
@@ -34,7 +34,8 @@ juce_generate_juce_header(LibrEQ)
 target_sources(LibrEQ PRIVATE
     src/Plugin/PluginProcessor.cpp
     src/Plugin/PluginEditor.cpp
-    src/DSP/Equalizer.cpp)
+    src/DSP/Equalizer.cpp
+    src/DSP/LinearPhase.cpp)
 target_include_directories(LibrEQ PRIVATE src)
 target_compile_features(LibrEQ PRIVATE cxx_std_20)
 target_compile_definitions(LibrEQ PUBLIC JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
@@ -47,7 +48,8 @@ target_sources(LibrEQUiCheck PRIVATE
     tests/UiCheck.cpp
     src/Plugin/PluginProcessor.cpp
     src/Plugin/PluginEditor.cpp
-    src/DSP/Equalizer.cpp)
+    src/DSP/Equalizer.cpp
+    src/DSP/LinearPhase.cpp)
 juce_generate_juce_header(LibrEQUiCheck)
 target_include_directories(LibrEQUiCheck PRIVATE src)
 target_compile_features(LibrEQUiCheck PRIVATE cxx_std_20)

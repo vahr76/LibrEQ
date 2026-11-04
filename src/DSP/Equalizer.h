@@ -4,8 +4,10 @@
 
 namespace libreq {
 
-enum class FilterType { Bell, LowShelf, HighShelf, HighPass, LowPass, Notch };
+// BandPass is internal: it is what a soloed Bell or Notch band plays.
+enum class FilterType { Bell, LowShelf, HighShelf, HighPass, LowPass, Notch, BandPass };
 enum class Slope { Db12, Db24, Db36, Db48 };
+enum class Placement { Stereo, Left, Right, Mid, Side };
 
 struct Band {
     FilterType type { FilterType::Bell };
@@ -13,6 +15,7 @@ struct Band {
     float gainDb { 0.0f };
     float q { 0.707f };
     Slope slope { Slope::Db12 };
+    Placement placement { Placement::Stereo };
     bool enabled { true };
 
     bool operator==(const Band&) const = default;
@@ -30,6 +33,10 @@ struct BandDesign {
 // Pure functions, safe to call from any thread.
 BandDesign designBand(const Band& band, double sampleRate) noexcept;
 double magnitudeDb(const BandDesign& design, double frequency, double sampleRate) noexcept;
+// Response of the analog filter that designBand() approximates. Independent of the sample rate.
+double analogMagnitudeDb(const Band& band, double frequency) noexcept;
+// What the band plays while soloed: the frequency range it acts on, at unity gain.
+Band soloedBand(Band band) noexcept;
 bool usesGain(FilterType type) noexcept;
 bool usesSlope(FilterType type) noexcept;
 
