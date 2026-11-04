@@ -81,7 +81,7 @@ private:
     std::array<float, LibrEQAudioProcessor::numBands> nodeAppear {};
     float selectionAppear { 0.0f };
     std::array<std::vector<float>, LibrEQAudioProcessor::numBands> bandCurves;
-    std::vector<float> totalCurve, scratch, preSmoothed, postSmoothed;
+    std::vector<float> totalCurve, secondaryCurve, scratch, preSmoothed, postSmoothed;
     double cachedRate { 0.0 };
     bool curvesDirty { true };
 };
@@ -117,6 +117,7 @@ public:
     BandPanel& getPanel() { return panel; }
     OutputMeter& getMeter() { return meter; }
     void refreshNow() { timerCallback(); }
+    juce::TextButton& getSoloButton() { return soloButton; }
 
 private:
     void timerCallback() override;
@@ -124,6 +125,8 @@ private:
     void layoutPanel();
     void movePanel(bool immediately);
     void showAnalyzerMenu();
+    void showPresetMenu();
+    void updateHeader();
     void setAnalyzerMode(EqGraph::AnalyzerMode);
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
@@ -136,13 +139,16 @@ private:
     EqGraph graph;
     OutputMeter meter;
     BandPanel panel;
-    juce::TextButton analyzerButton, bypassButton { "Bypass" }, bandOnButton { "On" }, removeButton { "Remove" };
-    juce::Slider outputKnob, frequencyKnob, gainKnob, qKnob;
-    juce::Label outputLabel, frequencyLabel, gainLabel, qLabel, bandLabel;
-    juce::ComboBox typeBox, slopeBox;
-    std::unique_ptr<SliderAttachment> outputAttachment, frequencyAttachment, gainAttachment, qAttachment;
-    std::unique_ptr<ButtonAttachment> bypassAttachment, bandOnAttachment;
-    std::unique_ptr<ComboAttachment> typeAttachment, slopeAttachment;
+    juce::TextButton analyzerButton, bypassButton { "Bypass" }, bandOnButton { "On" }, soloButton { "Solo" }, removeButton { "Remove" };
+    juce::TextButton presetButton, slotAButton { "A" }, slotBButton { "B" }, slotCopyButton { "Copy" }, undoButton { "Undo" }, redoButton { "Redo" };
+    juce::TextButton phaseButton, autoGainButton { "Auto" };
+    juce::Slider outputKnob, scaleKnob, frequencyKnob, gainKnob, qKnob;
+    juce::Label outputLabel, scaleLabel, frequencyLabel, gainLabel, qLabel, bandLabel;
+    juce::ComboBox typeBox, slopeBox, placementBox;
+    std::unique_ptr<SliderAttachment> outputAttachment, scaleAttachment, frequencyAttachment, gainAttachment, qAttachment;
+    std::unique_ptr<ButtonAttachment> bypassAttachment, autoGainAttachment, bandOnAttachment;
+    std::unique_ptr<ComboAttachment> typeAttachment, slopeAttachment, placementAttachment;
+    std::unique_ptr<juce::FileChooser> fileChooser;
     int boundBand { -2 };
     libreq::FilterType laidOutType { libreq::FilterType::Bell };
 

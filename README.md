@@ -6,15 +6,21 @@ EQ paramétrico original, libre y comunitario para Linux, C++20 + JUCE + CMake: 
 
 Implementado:
 
-- Hasta 24 bandas: Bell, Low Shelf, High Shelf, High Pass, Low Pass (12 a 48 dB/oct) y Notch.
-- Gráfica interactiva con la curva real de los filtros y analizador FFT de entrada y salida.
-- Automatización, cambios de parámetros suavizados, ganancia de salida, bypass y estado guardable. El callback de audio no asigna memoria.
+- Hasta 24 bandas: Bell, Low Shelf, High Shelf, High Pass, Low Pass (12 a 48 dB/oct) y Notch. Filtros ajustados a la respuesta analógica, para que los agudos no se compriman cerca de Nyquist.
+- Por banda: estéreo, izquierda, derecha, Mid o Side, y solo de banda.
+- Dos modos: latencia cero o fase lineal. A 44,1 o 48 kHz, la fase lineal añade 4096 muestras (unos 85 ms a 48 kHz) y la informa al host.
+- Global: escala de la curva, ganancia automática, ganancia de salida y bypass sin clic, con compensación de latencia.
+- Deshacer y rehacer, presets de fábrica y de usuario, y comparación A/B. El estado A/B y el modo del analizador se guardan con el proyecto.
+- Gráfica interactiva con la curva real de los filtros, analizador FFT de entrada y salida, medidor de picos y lectura de nota bajo el cursor.
+- Automatización y parámetros suavizados. El audio no asigna memoria ni usa bloqueos en el callback.
 
-Controles de la gráfica: doble clic agrega o elimina una banda, arrastrar mueve el nodo, la rueda o el anillo del nodo cambian Q, Alt+clic activa o desactiva, clic derecho abre opciones y Supr elimina. El cursor muestra frecuencia, nota y ganancia de la curva.
+Controles de la gráfica: doble clic agrega o elimina una banda, arrastrar mueve el nodo, la rueda o el anillo del nodo cambian Q, Alt+clic activa o desactiva, clic derecho abre opciones, Supr elimina, Ctrl+Z deshace y Ctrl+Mayús+Z rehace. Algunos hosts pueden reservar esos atajos; los botones `Undo` y `Redo` siempre funcionan.
+
+Los presets de usuario se guardan como archivos `.librq` en `~/.config/LibrEQ/Presets` en Linux.
 
 La interfaz incluye la tipografía [Inter](assets/fonts/LICENSE-Inter.txt), bajo licencia SIL OFL 1.1.
 
-Pendiente: presets, deshacer, EQ dinámica, Mid/Side, modos Natural y Linear Phase y pruebas en más hosts.
+Pendiente: EQ dinámica, compilación automática y *releases*, formatos CLAP y LV2, y pruebas en más hosts.
 
 ## Compilar
 
