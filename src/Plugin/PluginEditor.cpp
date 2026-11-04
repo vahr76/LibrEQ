@@ -31,6 +31,7 @@ LibrEQAudioProcessorEditor::LibrEQAudioProcessorEditor(LibrEQAudioProcessor& p) 
     setupSlider(qSlider, qLabel, "Q");
     selectedBand = 0;
     bindSelectedBand();
+    startTimerHz(30);
 }
 
 void LibrEQAudioProcessorEditor::resized() {
@@ -77,6 +78,7 @@ void LibrEQAudioProcessorEditor::paint(juce::Graphics& g) {
     for (int i = 0; i <= 8; ++i) { const auto db = 24 - i * 6; g.drawText(juce::String(db) + " dB", graph.getX() + 8, graph.getY() + i * graph.getHeight() / 8 - 8, 60, 16, juce::Justification::left); }
     const float freqs[] = { 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000 };
     for (float f : freqs) g.drawText(juce::String((int)f) + " Hz", (int)frequencyToX(f) - 24, graph.getBottom() - 24, 52, 16, juce::Justification::centred);
+    drawSpectrum(g, graph);
     juce::Path curve;
     juce::Path curveFill;
     curve.startNewSubPath((float)graph.getX(), gainToY(0.0f));
@@ -133,6 +135,28 @@ void LibrEQAudioProcessorEditor::paint(juce::Graphics& g) {
         }
     }
 }
+
+void LibrEQAudioProcessorEditor::drawSpectrum(juce::Graphics& g, juce::Rectangle<int> graph) const {
+    juce::Path spectrumPath;
+    spectrumPath.startNewSubPath((float) graph.getX(), (float) graph.getBottom() - 2.0f);
+    for (int px = 0; px <= graph.getWidth(); px += 3) {
+        const float frequency = xToFrequency((float) graph.getX() + (float) px);
+        const int bin = juce::jlimit(1, 1023, juce::roundToInt(frequency / 48000.0f * 2048.0f));
+        const float level = processor.getSpectrumBin(bin);
+        const float db = juce::jmap(std::sqrt(level), 0.0f, 1.0f, -72.0f, 0.0f);
+        const float y = juce::jmap(juce::jlimit(-72.0f, 0.0f, db), 0.0f, -72.0f,
+                                   (float) graph.getY() + 8.0f, (float) graph.getBottom() - 8.0f);
+        spectrumPath.lineTo((float) graph.getX() + (float) px, y);
+    }
+    spectrumPath.lineTo((float) graph.getRight(), (float) graph.getBottom() - 2.0f);
+    spectrumPath.closeSubPath();
+    g.setColour(juce::Colour(0x303e6d78));
+    g.fillPath(spectrumPath);
+    g.setColour(juce::Colour(0x806c9297));
+    g.strokePath(spectrumPath, juce::PathStrokeType(1.2f));
+}
+
+void LibrEQAudioProcessorEditor::timerCallback() { repaint(graphBounds()); }
 
 juce::Rectangle<int> LibrEQAudioProcessorEditor::graphBounds() const { return getLocalBounds().reduced(24).withTop(88).withBottom(getHeight() - 78); }
 float LibrEQAudioProcessorEditor::frequencyToX(float f) const { auto r = graphBounds(); return (float)r.getX() + juce::jmap(std::log10(juce::jlimit(20.0f, 20000.0f, f)), std::log10(20.0f), std::log10(20000.0f), 0.0f, (float)r.getWidth()); }

@@ -15,7 +15,9 @@ static juce::AudioProcessorValueTreeState::ParameterLayout createLayout() {
 
 LibrEQAudioProcessor::LibrEQAudioProcessor()
     : AudioProcessor(BusesProperties().withInput("Input", juce::AudioChannelSet::stereo(), true).withOutput("Output", juce::AudioChannelSet::stereo(), true)),
-      parameters(*this, nullptr, "PARAMETERS", createLayout()) {}
+      parameters(*this, nullptr, "PARAMETERS", createLayout()) {
+    for (auto& value : spectrum) value.store(0.0f);
+}
 
 void LibrEQAudioProcessor::prepareToPlay(double sampleRate, int blockSize) { eq.prepare(sampleRate, blockSize, getTotalNumOutputChannels()); }
 
@@ -33,6 +35,25 @@ void LibrEQAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
     }
     float* channels[2] = { buffer.getWritePointer(0), buffer.getNumChannels() > 1 ? buffer.getWritePointer(1) : buffer.getWritePointer(0) };
     eq.process(channels, buffer.getNumChannels(), buffer.getNumSamples());
+    for (int sample = 0; sample < buffer.getNumSamples(); ++sample) {
+        const float left = buffer.getSample(0, sample);
+        const float right = buffer.getNumChannels() > 1 ? buffer.getSample(1, sample) : left;
+        fftData[(size_t) fftIndex++] = 0.5f * (left + right);
+        if (fftIndex == fftSize) {
+            std::fill(fftData.begin() + fftSize, fftData.end(), 0.0f);
+            fft.performFrequencyOnlyForwardTransform(fftData.data());
+            for (int bin = 0; bin < fftSize / 2; ++bin) {
+                const float magnitude = juce::jlimit(0.0f, 1.0f, fftData[(size_t) bin] / (float) fftSize * 3.5f);
+                const float previous = spectrum[(size_t) bin].load(std::memory_order_relaxed);
+                spectrum[(size_t) bin].store(std::max(magnitude, previous * 0.78f), std::memory_order_relaxed);
+            }
+            fftIndex = 0;
+        }
+    }
+}
+
+float LibrEQAudioProcessor::getSpectrumBin(int index) const noexcept {
+    return index >= 0 && index < fftSize / 2 ? spectrum[(size_t) index].load(std::memory_order_relaxed) : 0.0f;
 }
 
 juce::AudioProcessorEditor* LibrEQAudioProcessor::createEditor() { return new LibrEQAudioProcessorEditor(*this); }

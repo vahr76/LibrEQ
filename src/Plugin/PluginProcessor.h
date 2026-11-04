@@ -25,7 +25,14 @@ public:
     void setStateInformation(const void*, int) override;
     juce::AudioProcessorValueTreeState parameters;
     arielo::Equalizer eq;
+    static constexpr int fftOrder = 11;
+    static constexpr int fftSize = 1 << fftOrder;
+    juce::dsp::FFT fft { fftOrder };
+    std::array<float, fftSize * 2> fftData {};
+    int fftIndex { 0 };
+    std::array<std::atomic<float>, fftSize / 2> spectrum {};
+public:
+    float getSpectrumBin(int index) const noexcept;
 private:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LibrEQAudioProcessor)
 };
-
