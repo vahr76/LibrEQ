@@ -1,0 +1,126 @@
+name: Build
+
+on:
+  push:
+    branches: [main, "claude/cross-platform"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PLUGINVAL_VERSION: v1.0.3
+
+jobs:
+  linux:
+    # An older base system keeps the plugin compatible with more distributions.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev libx11-dev libxext-dev libxinerama-dev libxrandr-dev libxcursor-dev libxcomposite-dev libfreetype6-dev libfontconfig1-dev fonts-dejavu-core mesa-common-dev libgl1-mesa-dev xvfb
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DLIBREQ_COPY_AFTER_BUILD=OFF
+          cmake --build build --target LibrEQ_VST3 LibrEQDspTests LibrEQUiCheck -j4
+      - name: Test
+        run: xvfb-run -a ctest --test-dir build --output-on-failure
+      - name: Package
+        run: |
+          version=$(sed -n 's/^project(LibrEQ VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          dir="LibrEQ-$version-Linux-x86_64"
+          mkdir -p "dist/$dir"
+          cp -R build/LibrEQ_artefacts/Release/VST3/LibrEQ.vst3 "dist/$dir/"
+          cp installer/linux/install.sh "dist/$dir/"
+          tar -C dist -czf "dist/$dir.tar.gz" "$dir"
+          "dist/$dir/install.sh"
+      - name: Validate the installed plugin
+        run: |
+          curl -fsSL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/download/$PLUGINVAL_VERSION/pluginval_Linux.zip"
+          unzip -q pluginval.zip
+          xvfb-run -a ./pluginval --strictness-level 8 --validate-in-process "$HOME/.vst3/LibrEQ.vst3"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LibrEQ-Linux
+          path: dist/*.tar.gz
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -S . -B build -A x64 -DLIBREQ_COPY_AFTER_BUILD=OFF
+          cmake --build build --config Release --target LibrEQ_VST3 LibrEQDspTests LibrEQUiCheck -- /m
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Package
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'project\(LibrEQ VERSION ([0-9.]+)').Matches[0].Groups[1].Value
+          $source = Resolve-Path build/LibrEQ_artefacts/Release/VST3
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" "/DSourceDir=$source" installer/windows/LibrEQ.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install silently
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem installer/windows/*-Setup.exe | Select-Object -First 1
+          Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          if (-not (Test-Path 'C:\Program Files\Common Files\VST3\LibrEQ.vst3\Contents\x86_64-win\LibrEQ.vst3')) { throw 'Plugin was not installed' }
+      - name: Validate the installed plugin
+        shell: pwsh
+        run: |
+          Invoke-WebRequest "https://github.com/Tracktion/pluginval/releases/download/$env:PLUGINVAL_VERSION/pluginval_Windows.zip" -OutFile pluginval.zip
+          Expand-Archive pluginval.zip -DestinationPath pv
+          $p = Start-Process -FilePath pv\pluginval.exe -ArgumentList '--strictness-level','8','--validate-in-process','"C:\Program Files\Common Files\VST3\LibrEQ.vst3"' -Wait -PassThru -NoNewWindow
+          exit $p.ExitCode
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LibrEQ-Windows
+          path: installer/windows/*-Setup.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DLIBREQ_COPY_AFTER_BUILD=OFF "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+          cmake --build build --target LibrEQ_VST3 LibrEQ_AU LibrEQDspTests LibrEQUiCheck -j4
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Package
+        run: |
+          version=$(sed -n 's/^project(LibrEQ VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          root=dist/root/Library/Audio/Plug-Ins
+          mkdir -p "$root/Components" "$root/VST3" dist/scripts
+          cp -R build/LibrEQ_artefacts/Release/AU/LibrEQ.component "$root/Components/"
+          cp -R build/LibrEQ_artefacts/Release/VST3/LibrEQ.vst3 "$root/VST3/"
+          # Without an Apple Developer ID this is an ad-hoc signature, which Apple Silicon requires.
+          codesign --force --deep --sign - "$root/Components/LibrEQ.component"
+          codesign --force --deep --sign - "$root/VST3/LibrEQ.vst3"
+          cp installer/macos/postinstall dist/scripts/
+          pkgbuild --root dist/root --scripts dist/scripts --identifier org.libreq.audio.libreq --version "$version" --install-location / "dist/LibrEQ-$version-macOS.pkg"
+      - name: Install the package
+        run: sudo installer -pkg dist/LibrEQ-*-macOS.pkg -target /
+      - name: Validate the installed Audio Unit
+        run: |
+          lipo -info /Library/Audio/Plug-Ins/Components/LibrEQ.component/Contents/MacOS/LibrEQ
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          sleep 3
+          auval -a | grep -i LibrEQ
+          auval -strict -v aufx LiEQ LiEQ
+      - name: Validate the installed VST3
+        run: |
+          curl -fsSL -o pluginval.zip "https://github.com/Tracktion/pluginval/releases/download/$PLUGINVAL_VERSION/pluginval_macOS.zip"
+          unzip -q pluginval.zip
+          ./pluginval.app/Contents/MacOS/pluginval --strictness-level 8 --validate-in-process /Library/Audio/Plug-Ins/VST3/LibrEQ.vst3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LibrEQ-macOS
+          path: dist/*.pkg

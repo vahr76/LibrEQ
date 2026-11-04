@@ -1,0 +1,4 @@
+#!/bin/sh
+# Make macOS notice the new Audio Unit without a restart.
+/usr/bin/killall -9 AudioComponentRegistrar 2>/dev/null || true
+exit 0
