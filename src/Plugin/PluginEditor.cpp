@@ -6,7 +6,7 @@ namespace colours {
 const juce::Colour window { 0xff0f1218 }, panel { 0xff171b23 }, panelRaised { 0xff262c37 }, plot { 0xff0b0e13 };
 const juce::Colour gridMajor = juce::Colours::white.withAlpha(0.075f), gridMinor = juce::Colours::white.withAlpha(0.03f), zero { 0xff3c4654 };
 const juce::Colour text { 0xffe6ebf0 }, textDim { 0xff8a95a3 }, accent { 0xff58d6bd };
-const juce::Colour preSpectrum { 0xff4a5462 }, postSpectrum { 0xff3f8f83 };
+const juce::Colour preSpectrum { 0xff536273 }, postSpectrum { 0xff49b9a4 };
 const juce::Colour meterHot { 0xfff0a95b }, meterClip { 0xffef5b5b };
 } // namespace colours
 
@@ -573,6 +573,12 @@ void EqGraph::drawBandCurves(juce::Graphics& g) const {
 
     if (! totalCurve.empty()) {
         const auto total = curvePath(totalCurve);
+        juce::Path fill(total);
+        fill.lineTo(r.getRight(), gainToY(0.0f));
+        fill.lineTo(r.getX(), gainToY(0.0f));
+        fill.closeSubPath();
+        g.setColour(colours::accent.withAlpha(0.055f));
+        g.fillPath(fill);
         const auto rounded = [](float width) { return juce::PathStrokeType(width, juce::PathStrokeType::curved, juce::PathStrokeType::rounded); };
         g.setColour(colours::text.withAlpha(0.05f));
         g.strokePath(total, rounded(10.0f));
@@ -617,8 +623,10 @@ void EqGraph::drawNodes(juce::Graphics& g) const {
             g.setColour(colour.darker(0.2f));
             g.drawEllipse(juce::Rectangle<float>(handleRadius * 2.0f, handleRadius * 2.0f).withCentre(handle), 1.2f);
         } else if (active) {
-            g.setColour(colour.withAlpha(0.22f));
-            g.fillEllipse(juce::Rectangle<float>(32.0f, 32.0f).withCentre(position));
+            g.setColour(colour.withAlpha(0.18f));
+            g.fillEllipse(juce::Rectangle<float>(38.0f, 38.0f).withCentre(position));
+            g.setColour(colour.withAlpha(0.65f));
+            g.drawEllipse(juce::Rectangle<float>(29.0f, 29.0f).withCentre(position), 1.1f);
         }
 
         const auto node = juce::Rectangle<float>(radius * 2.0f, radius * 2.0f).withCentre(position);
@@ -645,6 +653,8 @@ void EqGraph::drawNodes(juce::Graphics& g) const {
             box.setX(juce::jlimit(r.getX() + 4.0f, r.getRight() - box.getWidth() - 4.0f, box.getX()));
             g.setColour(colours::panelRaised.withAlpha(0.94f));
             g.fillRoundedRectangle(box, 5.0f);
+            g.setColour(colour.withAlpha(0.75f));
+            g.fillRoundedRectangle(box.withWidth(3.0f), 2.0f);
             g.setColour(colours::text);
             g.setFont(fonts->regular(11.5f));
             g.drawText(info, box, juce::Justification::centred);
