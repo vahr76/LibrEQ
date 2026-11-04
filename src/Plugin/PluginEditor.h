@@ -45,7 +45,8 @@ private:
     float yToGain(float) const;
     float dbToSpectrumY(float) const;
     juce::Rectangle<float> plot() const;
-    juce::Path spectrumPath(const std::vector<float>& smoothed) const;
+    juce::Path spectrumCurve(const std::vector<float>& smoothed) const;
+    void drawSpectrum(juce::Graphics&, const std::vector<float>& smoothed, juce::Colour, float fillAlpha, float lineAlpha, float lineWidth) const;
     void updateSpectrum(libreq::SpectrumTap&, std::vector<float>& smoothed);
 
     LibrEQAudioProcessor& processor;
