@@ -20,11 +20,15 @@ Los presets de usuario se guardan como archivos `.librq` en `~/.config/LibrEQ/Pr
 
 La interfaz incluye la tipografía [Inter](assets/fonts/LICENSE-Inter.txt), bajo licencia SIL OFL 1.1.
 
-Pendiente: EQ dinámica, compilación automática y *releases*, formatos CLAP y LV2, y pruebas en más hosts.
+Pendiente: EQ dinámica, firma de instaladores, *releases*, formatos CLAP y LV2, y pruebas en más hosts.
+
+## Instalar
+
+Consulta [INSTALL.md](INSTALL.md). GitHub Actions compila, instala y valida los paquetes para Windows, macOS y Linux en cada cambio.
 
 ## Compilar
 
-Requiere CMake 3.22+, un compilador C++20 y Git. En Linux también hacen falta las [dependencias de JUCE](https://github.com/juce-framework/JUCE/blob/master/docs/Linux%20Dependencies.md). JUCE 8.0.10 se descarga automáticamente:
+Requiere CMake 3.22+, un compilador C++20 y Git. En macOS se genera además la versión AU. En Linux también hacen falta las [dependencias de JUCE](https://github.com/juce-framework/JUCE/blob/master/docs/Linux%20Dependencies.md). JUCE 8.0.10 se descarga automáticamente:
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
