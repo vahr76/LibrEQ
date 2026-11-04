@@ -72,3 +72,7 @@ target_compile_features(LibrEQUiCheck PRIVATE cxx_std_20)
 target_compile_definitions(LibrEQUiCheck PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_STANDALONE_APPLICATION=0)
 target_link_libraries(LibrEQUiCheck PRIVATE LibrEQAssets juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
 add_test(NAME ui COMMAND LibrEQUiCheck)
+if(MSVC)
+    # The checks keep several processors on the stack; the default on Windows is only 1 MB.
+    target_link_options(LibrEQUiCheck PRIVATE /STACK:16777216)
+endif()

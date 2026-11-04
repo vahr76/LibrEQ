@@ -32,6 +32,7 @@ static double rmsDbAfter(LibrEQAudioProcessor& p, double frequency) {
 }
 
 int main(int argc, char** argv) {
+    std::setvbuf(stdout, nullptr, _IONBF, 0); // Keep the output if a check crashes.
     juce::ScopedJuceInitialiser_GUI gui;
     {
         LibrEQAudioProcessor processor;
