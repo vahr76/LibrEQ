@@ -10,7 +10,9 @@ Implementado:
 - Gráfica interactiva con la curva real de los filtros y analizador FFT de entrada y salida.
 - Automatización, cambios de parámetros suavizados, ganancia de salida, bypass y estado guardable. El callback de audio no asigna memoria.
 
-Controles de la gráfica: doble clic agrega o elimina una banda, arrastrar mueve el nodo, la rueda cambia Q, Alt+clic activa o desactiva, clic derecho abre opciones y Supr elimina.
+Controles de la gráfica: doble clic agrega o elimina una banda, arrastrar mueve el nodo, la rueda o el anillo del nodo cambian Q, Alt+clic activa o desactiva, clic derecho abre opciones y Supr elimina. El cursor muestra frecuencia, nota y ganancia de la curva.
+
+La interfaz incluye la tipografía [Inter](assets/fonts/LICENSE-Inter.txt), bajo licencia SIL OFL 1.1.
 
 Pendiente: presets, deshacer, EQ dinámica, Mid/Side, modos Natural y Linear Phase y pruebas en más hosts.
 

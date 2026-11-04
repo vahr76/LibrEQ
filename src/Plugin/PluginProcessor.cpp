@@ -106,6 +106,13 @@ void LibrEQAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
     }
     wasBypassed = bypassed;
 
+    for (int ch = 0; ch < 2; ++ch) {
+        const float peak = buffer.getMagnitude(juce::jmin(ch, numChannels - 1), 0, numSamples);
+        auto& stored = outputPeaks[static_cast<size_t>(ch)];
+        if (peak > stored.load(std::memory_order_relaxed))
+            stored.store(peak, std::memory_order_relaxed);
+    }
+
     if (analyzer)
         postSpectrum.push(buffer.getArrayOfReadPointers(), numChannels, numSamples);
 }

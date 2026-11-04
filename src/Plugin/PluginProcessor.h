@@ -49,6 +49,11 @@ public:
     libreq::SpectrumTap preSpectrum, postSpectrum;
     std::atomic<bool> analyzerWanted { false };
 
+    // Highest absolute output sample per channel since the last call. Call from the UI thread.
+    std::array<float, 2> takeOutputPeaks() noexcept {
+        return { outputPeaks[0].exchange(0.0f, std::memory_order_relaxed), outputPeaks[1].exchange(0.0f, std::memory_order_relaxed) };
+    }
+
 private:
     libreq::Equalizer eq;
     std::array<BandParameters, numBands> bands {};
@@ -57,6 +62,7 @@ private:
     juce::SmoothedValue<float> outputGain;
     std::atomic<double> sampleRateForUi { 48000.0 };
     bool wasBypassed { false };
+    std::array<std::atomic<float>, 2> outputPeaks {};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LibrEQAudioProcessor)
 };

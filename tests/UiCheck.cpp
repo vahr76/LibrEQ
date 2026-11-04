@@ -41,6 +41,15 @@ int main(int argc, char** argv) {
         check("new instance is transparent", std::abs(rmsDbAfter(processor, 1000.0)) < 0.001);
 
         std::unique_ptr<juce::AudioProcessorEditor> base(processor.createEditor());
+        if (argc > 2) {
+            auto* first = dynamic_cast<LibrEQAudioProcessorEditor*>(base.get());
+            for (int i = 0; i < 3; ++i) first->refreshNow();
+            const auto image = first->createComponentSnapshot(first->getLocalBounds(), true, 2.0f);
+            juce::File file(juce::String::fromUTF8(argv[2]));
+            file.deleteFile();
+            juce::FileOutputStream out(file);
+            juce::PNGImageFormat().writeImageToStream(image, out);
+        }
         auto* editor = dynamic_cast<LibrEQAudioProcessorEditor*>(base.get());
         check("editor opens", editor != nullptr);
         auto& graph = editor->getGraph();
@@ -73,6 +82,48 @@ int main(int argc, char** argv) {
         check("alt-click disables band", ! processor.readBand(0).enabled);
         check("disabled band is inaudible", std::abs(rmsDbAfter(processor, processor.readBand(0).frequency)) < 0.01);
         graph.mouseDown(mouseAt(graph, graph.nodePosition(0), juce::ModifierKeys::altModifier));
+
+        // The ring handle changes Q in octaves per 70 pixels of drag.
+        {
+            graph.setSelected(0);
+            const auto q0 = processor.readBand(0).q;
+            const auto handle = graph.qHandlePosition(0);
+            graph.mouseDown(mouseAt(graph, handle));
+            auto drag = juce::MouseEvent(juce::Desktop::getInstance().getMainMouseSource(), handle.translated(70.0f, 0.0f), {}, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, &graph, &graph, juce::Time::getCurrentTime(), handle, juce::Time::getCurrentTime(), 1, true);
+            graph.mouseDrag(drag);
+            graph.mouseUp(drag);
+            check("ring handle doubles Q", std::abs(processor.readBand(0).q / q0 - 2.0f) < 0.05f);
+            check("ring handle keeps frequency", std::abs(processor.readBand(0).frequency - 4000.0f) < 50.0f);
+            processor.band(0).q->setValueNotifyingHost(processor.band(0).q->convertTo0to1(q0));
+        }
+
+        // The floating panel opens for the selected band and stays inside the graph.
+        for (int i = 0; i < 12; ++i)
+            editor->refreshNow();
+        check("panel is visible while a band is selected", editor->getPanel().isVisible());
+        check("panel stays inside the editor", editor->getLocalBounds().contains(editor->getPanel().getBounds()));
+        {
+            const auto node = graph.nodePosition(0) + graph.getPosition().toFloat();
+            check("panel does not cover its node", ! editor->getPanel().getBounds().toFloat().expanded(10.0f).contains(node));
+        }
+
+        // Meter and helpers.
+        rmsDbAfter(processor, 1000.0);
+        {
+            const auto peaks = processor.takeOutputPeaks();
+            check("output peaks are reported", peaks[0] > 0.1f && peaks[1] > 0.1f);
+            check("output peaks are consumed", processor.takeOutputPeaks()[0] < 1.0e-6f);
+            editor->getMeter().update(peaks);
+            check("meter tracks the highest level", editor->getMeter().getMaxDb() > -20.0f);
+        }
+        check("A4 note label", libreq::noteLabel(440.0) == "A4");
+        check("C4 note label", libreq::noteLabel(261.6256) == "C4");
+        check("note label shows cents", libreq::noteLabel(445.0) == "A4 +20c");
+        check("embedded fonts load", juce::SharedResourcePointer<libreq::UiFonts>()->loaded());
+
+        graph.setAnalyzerMode(EqGraph::AnalyzerMode::Off);
+        check("analyzer can be turned off", ! processor.analyzerWanted.load());
+        graph.setAnalyzerMode(EqGraph::AnalyzerMode::InputOutput);
 
         // Choice parameters must reach the DSP with the right index.
         for (int i = 0; i < 6; ++i) {
@@ -163,6 +214,7 @@ int main(int argc, char** argv) {
         graph.setSelected(3);
         editor->refreshNow();
 
+        graph.mouseExit(mouseAt(graph, { 0.0f, 0.0f }));
         check("editor stays usable at minimum size", [&] { editor->setSize(760, 460); editor->refreshNow(); return graph.getWidth() > 0 && ! editor->createComponentSnapshot(editor->getLocalBounds()).isNull(); }());
         editor->setSize(1040, 620);
         graph.setSelected(3);
@@ -188,6 +240,16 @@ int main(int argc, char** argv) {
         if (argc > 1) {
             const auto image = editor->createComponentSnapshot(editor->getLocalBounds(), true, 2.0f);
             juce::File file(juce::String::fromUTF8(argv[1]));
+            file.deleteFile();
+            juce::FileOutputStream out(file);
+            juce::PNGImageFormat().writeImageToStream(image, out);
+        }
+        if (argc > 3) {
+            graph.setSelected(-1);
+            graph.mouseMove(mouseAt(graph, { graph.frequencyToX(440.0f), graph.gainToY(18.0f) }));
+            editor->refreshNow();
+            const auto image = editor->createComponentSnapshot(editor->getLocalBounds(), true, 2.0f);
+            juce::File file(juce::String::fromUTF8(argv[3]));
             file.deleteFile();
             juce::FileOutputStream out(file);
             juce::PNGImageFormat().writeImageToStream(image, out);
