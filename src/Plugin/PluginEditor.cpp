@@ -4,7 +4,7 @@
 namespace {
 namespace colours {
 const juce::Colour window { 0xff0f1218 }, panel { 0xff171b23 }, panelRaised { 0xff262c37 }, plot { 0xff0b0e13 };
-const juce::Colour gridMajor = juce::Colours::white.withAlpha(0.075f), gridMinor = juce::Colours::white.withAlpha(0.03f), zero { 0xff3c4654 };
+const juce::Colour gridMajor { 0x13ffffff }, gridMinor { 0x08ffffff }, zero { 0xff3c4654 };
 const juce::Colour text { 0xffe6ebf0 }, textDim { 0xff8a95a3 }, accent { 0xff58d6bd };
 const juce::Colour preSpectrum { 0xff536273 }, postSpectrum { 0xff49b9a4 };
 const juce::Colour meterHot { 0xfff0a95b }, meterClip { 0xffef5b5b };
