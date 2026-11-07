@@ -161,25 +161,67 @@ double magnitudeDb(const BandDesign& design, double frequency, double sampleRate
     return db;
 }
 
+namespace {
+using ChunkBuffer = std::array<double, 32>;
+
+template <typename State>
+void filterChunk(const BandDesign& design, State& state, int channel, double* samples, int n) noexcept {
+    for (int i = 0; i < design.count; ++i) {
+        const auto section = static_cast<std::size_t>(i);
+        const auto& f = design.sections[section];
+        auto& s = state[section][static_cast<std::size_t>(channel)];
+        double z1 = s.z1, z2 = s.z2;
+        for (int x = 0; x < n; ++x) {
+            const double in = samples[x];
+            const double out = f.b0 * in + z1;
+            z1 = f.b1 * in - f.a1 * out + z2;
+            z2 = f.b2 * in - f.a2 * out;
+            samples[x] = out;
+        }
+        s.z1 = z1;
+        s.z2 = z2;
+    }
+}
+} // namespace
+
 void Equalizer::prepare(double sampleRate, int, int) {
     sr = sampleRate;
     smoothing = std::exp(-static_cast<double>(chunkSize) / (0.02 * sr));
     for (auto& slot : slots) {
         slot.snap = true;
         slot.current = slot.target;
+        slot.dynamicGainDb = 0.0;
         redesign(slot);
     }
     reset();
 }
 
 void Equalizer::reset() noexcept {
-    for (auto& slot : slots)
+    for (std::size_t i = 0; i < maxBands; ++i) {
+        auto& slot = slots[i];
         slot.state = {};
+        slot.detectorState = {};
+        slot.envelope = 0.0;
+        if (slot.current.dynamic) {
+            slot.dynamicGainDb = 0.0;
+            redesign(slot, false);
+        }
+        liveGain[i].store(slot.current.dynamic ? 0.0f : slot.current.gainDb, std::memory_order_relaxed);
+    }
 }
 
-void Equalizer::redesign(Slot& slot) noexcept {
-    slot.design = designBand(slot.current, sr);
-    slot.active = usesGain(slot.current.type) ? std::abs(slot.current.gainDb) > 1.0e-4f : slot.current.enabled;
+void Equalizer::redesign(Slot& slot, bool withDetector) noexcept {
+    const bool dynamic = slot.current.dynamic && usesGain(slot.current.type);
+    Band applied = slot.current;
+    if (dynamic)
+        applied.gainDb = static_cast<float>(slot.dynamicGainDb);
+    slot.design = designBand(applied, sr);
+    if (dynamic && withDetector)
+        slot.detector = designBand(soloedBand(slot.current), sr);
+    if (dynamic)
+        slot.active = slot.current.enabled || std::abs(slot.dynamicGainDb) > 1.0e-4;
+    else
+        slot.active = usesGain(slot.current.type) ? std::abs(slot.current.gainDb) > 1.0e-4f : slot.current.enabled;
 }
 
 void Equalizer::setBand(std::size_t index, const Band& band) noexcept {
@@ -198,12 +240,29 @@ void Equalizer::setBand(std::size_t index, const Band& band) noexcept {
     if (slot.snap || slot.current.type != target.type || slot.current.slope != target.slope || slot.current.placement != target.placement) {
         slot.current = target;
         slot.state = {};
+        slot.detectorState = {};
+        slot.envelope = 0.0;
+        slot.dynamicGainDb = 0.0;
         slot.snap = false;
         slot.moving = false;
         redesign(slot);
-    } else {
-        slot.moving = true;
+        return;
     }
+
+    // Switching dynamics on or off continues from the gain being applied, so it does not click.
+    if (slot.current.dynamic != target.dynamic) {
+        if (target.dynamic)
+            slot.dynamicGainDb = slot.current.gainDb;
+        else
+            slot.current.gainDb = static_cast<float>(slot.dynamicGainDb);
+        slot.current.dynamic = target.dynamic;
+        slot.envelope = 0.0;
+        slot.detectorState = {};
+    }
+    slot.current.thresholdDb = target.thresholdDb;
+    slot.current.enabled = target.enabled;
+    slot.moving = true;
+    redesign(slot);
 }
 
 void Equalizer::advanceSmoothing() noexcept {
@@ -233,28 +292,40 @@ void Equalizer::advanceSmoothing() noexcept {
     }
 }
 
+void Equalizer::updateDynamics(Slot& slot, std::array<std::array<double, chunkSize>, 2>& buffer, int first, int count, int n) noexcept {
+    // Level in the band's own range, measured on the signal that reaches it.
+    double power = 0.0;
+    for (int ch = first; ch < first + count; ++ch) {
+        ChunkBuffer probe;
+        std::copy(buffer[static_cast<std::size_t>(ch)].begin(), buffer[static_cast<std::size_t>(ch)].begin() + n, probe.begin());
+        filterChunk(slot.detector, slot.detectorState, ch, probe.data(), n);
+        double sum = 0.0;
+        for (int x = 0; x < n; ++x)
+            sum += probe[static_cast<std::size_t>(x)] * probe[static_cast<std::size_t>(x)];
+        power = std::max(power, sum / n);
+    }
+
+    const double chunkSeconds = n / sr;
+    const double powerTime = power > slot.envelope ? 0.003 : 0.06;
+    slot.envelope = power + (slot.envelope - power) * std::exp(-chunkSeconds / powerTime);
+
+    // +3 dB so that a sine reads its peak level, like a meter.
+    const double levelDb = 10.0 * std::log10(std::max(slot.envelope, 1.0e-14)) + 3.0103;
+    const double limit = slot.current.gainDb;
+    const double overshoot = std::max(0.0, levelDb - slot.current.thresholdDb);
+    const double target = limit < 0.0 ? std::max(limit, -overshoot * dynamicSlope) : std::min(limit, overshoot * dynamicSlope);
+
+    const double gainTime = std::abs(target) > std::abs(slot.dynamicGainDb) ? 0.005 : 0.08;
+    slot.dynamicGainDb = target + (slot.dynamicGainDb - target) * std::exp(-chunkSeconds / gainTime);
+    redesign(slot, false);
+}
+
 void Equalizer::process(float* const* channels, int numChannels, int numSamples) noexcept {
     const int nc = std::min(numChannels, 2);
     std::array<std::array<double, chunkSize>, 2> buffer;
 
-    const auto runBand = [&buffer](Slot& slot, int channel, int stateChannel, int n) noexcept {
-        auto& samples = buffer[static_cast<std::size_t>(channel)];
-        for (int i = 0; i < slot.design.count; ++i) {
-            const auto section = static_cast<std::size_t>(i);
-            const auto& f = slot.design.sections[section];
-            auto& s = slot.state[section][static_cast<std::size_t>(stateChannel)];
-            double z1 = s.z1, z2 = s.z2;
-            for (int x = 0; x < n; ++x) {
-                auto& value = samples[static_cast<std::size_t>(x)];
-                const double in = value;
-                const double out = f.b0 * in + z1;
-                z1 = f.b1 * in - f.a1 * out + z2;
-                z2 = f.b2 * in - f.a2 * out;
-                value = out;
-            }
-            s.z1 = z1;
-            s.z2 = z2;
-        }
+    const auto runBand = [&buffer](Slot& slot, int channel, int n) noexcept {
+        filterChunk(slot.design, slot.state, channel, buffer[static_cast<std::size_t>(channel)].data(), n);
     };
 
     for (int offset = 0; offset < numSamples; offset += chunkSize) {
@@ -269,26 +340,37 @@ void Equalizer::process(float* const* channels, int numChannels, int numSamples)
                 continue;
 
             const auto placement = slot.current.placement;
-            if (nc < 2) {
-                // On a mono signal the only content is left or mid.
-                if (placement != Placement::Right && placement != Placement::Side)
-                    runBand(slot, 0, 0, n);
-            } else if (placement == Placement::Stereo) {
-                runBand(slot, 0, 0, n);
-                runBand(slot, 1, 1, n);
-            } else if (placement == Placement::Left) {
-                runBand(slot, 0, 0, n);
-            } else if (placement == Placement::Right) {
-                runBand(slot, 1, 1, n);
-            } else {
+            const bool dynamic = slot.current.dynamic && usesGain(slot.current.type);
+            const bool midSide = nc == 2 && (placement == Placement::Mid || placement == Placement::Side);
+            if (midSide) {
                 for (int x = 0; x < n; ++x) {
                     const auto i = static_cast<std::size_t>(x);
                     const double l = buffer[0][i], r = buffer[1][i];
                     buffer[0][i] = 0.5 * (l + r);
                     buffer[1][i] = 0.5 * (l - r);
                 }
-                const int encoded = placement == Placement::Mid ? 0 : 1;
-                runBand(slot, encoded, encoded, n);
+            }
+
+            // Which channels of the buffer this band acts on.
+            int first = 0, count = 0;
+            if (nc < 2) {
+                // On a mono signal the only content is left or mid.
+                count = placement != Placement::Right && placement != Placement::Side ? 1 : 0;
+            } else if (placement == Placement::Stereo) {
+                count = 2;
+            } else if (placement == Placement::Left || placement == Placement::Mid) {
+                count = 1;
+            } else {
+                first = 1;
+                count = 1;
+            }
+
+            if (dynamic && count > 0)
+                updateDynamics(slot, buffer, first, count, n);
+            for (int ch = first; ch < first + count; ++ch)
+                runBand(slot, ch, n);
+
+            if (midSide) {
                 for (int x = 0; x < n; ++x) {
                     const auto i = static_cast<std::size_t>(x);
                     const double mid = buffer[0][i], side = buffer[1][i];
@@ -303,6 +385,12 @@ void Equalizer::process(float* const* channels, int numChannels, int numSamples)
             for (int x = 0; x < n; ++x)
                 samples[x] = static_cast<float>(buffer[static_cast<std::size_t>(ch)][static_cast<std::size_t>(x)]);
         }
+    }
+
+    for (std::size_t i = 0; i < maxBands; ++i) {
+        const auto& slot = slots[i];
+        const bool dynamic = slot.current.dynamic && usesGain(slot.current.type);
+        liveGain[i].store(static_cast<float>(dynamic ? slot.dynamicGainDb : slot.current.gainDb), std::memory_order_relaxed);
     }
 }
 

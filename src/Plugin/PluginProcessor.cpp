@@ -10,6 +10,13 @@ juce::AudioParameterFloatAttributes decimals(int places) {
     return juce::AudioParameterFloatAttributes().withStringFromValueFunction([places](float v, int) { return juce::String(v, places); });
 }
 
+// Accepts "1500", "1.5k", "1.5 kHz" or "1500 Hz".
+float frequencyFromText(const juce::String& text) {
+    const auto t = text.trim().toLowerCase();
+    const float value = t.getFloatValue();
+    return t.containsChar('k') ? value * 1000.0f : value;
+}
+
 juce::AudioProcessorValueTreeState::ParameterLayout createLayout() {
     using Id = juce::ParameterID;
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
@@ -28,13 +35,17 @@ juce::AudioProcessorValueTreeState::ParameterLayout createLayout() {
         layout.add(std::make_unique<juce::AudioParameterChoice>(id("type"), name + "Type", filterTypeNames, 0));
         juce::NormalisableRange<float> frequency(20.0f, 20000.0f, 0.01f);
         frequency.setSkewForCentre(632.0f);
-        layout.add(std::make_unique<juce::AudioParameterFloat>(id("freq"), name + "Frequency", frequency, 1000.0f, juce::AudioParameterFloatAttributes().withStringFromValueFunction([](float v, int) { return juce::String(v, v < 100.0f ? 1 : 0); })));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(id("freq"), name + "Frequency", frequency, 1000.0f, juce::AudioParameterFloatAttributes()
+                                                                   .withStringFromValueFunction([](float v, int) { return juce::String(v, v < 100.0f ? 1 : 0); })
+                                                                   .withValueFromStringFunction(frequencyFromText)));
         layout.add(std::make_unique<juce::AudioParameterFloat>(id("gain"), name + "Gain", juce::NormalisableRange<float>(-30.0f, 30.0f, 0.01f), 0.0f, decimals(1)));
         juce::NormalisableRange<float> q(0.1f, 20.0f, 0.001f);
         q.setSkewForCentre(1.0f);
         layout.add(std::make_unique<juce::AudioParameterFloat>(id("q"), name + "Q", q, 0.707f, decimals(2)));
         layout.add(std::make_unique<juce::AudioParameterChoice>(id("slope"), name + "Slope", slopeNames, 0));
         layout.add(std::make_unique<juce::AudioParameterChoice>(id("placement"), name + "Placement", placementNames, 0));
+        layout.add(std::make_unique<juce::AudioParameterBool>(id("dyn"), name + "Dynamic", false));
+        layout.add(std::make_unique<juce::AudioParameterFloat>(id("thresh"), name + "Threshold", juce::NormalisableRange<float>(-60.0f, 0.0f, 0.1f), -24.0f, decimals(1)));
     }
     return layout;
 }
@@ -88,6 +99,8 @@ LibrEQAudioProcessor::LibrEQAudioProcessor()
         bind("q", b.q, b.qRaw);
         bind("slope", b.slope, b.slopeRaw);
         bind("placement", b.placement, b.placementRaw);
+        bind("dyn", b.dynamic, b.dynamicRaw);
+        bind("thresh", b.threshold, b.thresholdRaw);
     }
     bypassParameter = parameters.getParameter("bypass");
     phaseParameter = parameters.getParameter("phase");
@@ -155,6 +168,8 @@ libreq::Band LibrEQAudioProcessor::readBand(int index) const noexcept {
     result.frequency = p.frequencyRaw->load();
     result.gainDb = p.gainRaw->load();
     result.q = p.qRaw->load();
+    result.dynamic = p.dynamicRaw->load() > 0.5f;
+    result.thresholdDb = p.thresholdRaw->load();
     result.enabled = p.usedRaw->load() > 0.5f && p.onRaw->load() > 0.5f;
     return result;
 }
@@ -165,15 +180,25 @@ libreq::Band LibrEQAudioProcessor::scaledBand(int index) const noexcept {
     return result;
 }
 
-libreq::Band LibrEQAudioProcessor::dspBand(int index, int solo) const noexcept {
+libreq::Band LibrEQAudioProcessor::dspBand(int index, int solo, Engine engine) const noexcept {
     auto result = scaledBand(index);
-    if (solo < 0)
+    if (solo < 0) {
+        // Linear phase cannot follow a gain that changes constantly; dynamic bands stay in the IIR engine.
+        const bool dynamic = result.dynamic && libreq::usesGain(result.type);
+        if ((engine == Engine::Fir && dynamic) || (engine == Engine::IirBesideFir && ! dynamic))
+            result.enabled = false;
         return result;
+    }
+    if (engine == Engine::IirBesideFir) {
+        result.enabled = false;
+        return result;
+    }
     if (index != solo) {
         result.enabled = false;
         return result;
     }
     result = libreq::soloedBand(result);
+    result.dynamic = false;
     result.enabled = isBandUsed(index);
     return result;
 }
@@ -187,7 +212,8 @@ float LibrEQAudioProcessor::computeAutoGain() const {
     bool any = false;
     for (int i = 0; i < numBands; ++i) {
         const auto b = scaledBand(i);
-        if (! b.enabled)
+        // A dynamic band is usually at rest, so it does not count.
+        if (! b.enabled || (b.dynamic && libreq::usesGain(b.type)))
             continue;
         designs[static_cast<size_t>(i)] = libreq::designBand(b, rate);
         weights[static_cast<size_t>(i)] = b.placement == libreq::Placement::Stereo ? 1.0 : 0.5;
@@ -217,7 +243,7 @@ void LibrEQAudioProcessor::runBackgroundDesign(bool force) {
     libreq::LinearPhaseEngine::Bands target;
     std::array<libreq::Band, numBands> forGain;
     for (int i = 0; i < numBands; ++i) {
-        target[static_cast<size_t>(i)] = dspBand(i, solo);
+        target[static_cast<size_t>(i)] = dspBand(i, solo, Engine::Fir);
         forGain[static_cast<size_t>(i)] = scaledBand(i);
     }
 
@@ -246,6 +272,12 @@ void LibrEQAudioProcessor::timerCallback() {
     flushHistory();
 }
 
+void LibrEQAudioProcessor::pushBandsToIir(int solo) noexcept {
+    const auto engine = activeLinear ? Engine::IirBesideFir : Engine::Iir;
+    for (int i = 0; i < numBands; ++i)
+        eq.setBand(static_cast<std::size_t>(i), dspBand(i, solo, engine));
+}
+
 void LibrEQAudioProcessor::processChunk(float* const* channels, int numChannels, int numSamples) noexcept {
     // The dry path matches the latency of the wet path, so bypass can crossfade.
     const int ringSize = static_cast<int>(dryRing[0].size());
@@ -262,8 +294,7 @@ void LibrEQAudioProcessor::processChunk(float* const* channels, int numChannels,
 
     if (activeLinear)
         linearPhase.process(channels, numChannels, numSamples);
-    else
-        eq.process(channels, numChannels, numSamples);
+    eq.process(channels, numChannels, numSamples);
 
     for (int i = 0; i < numSamples; ++i) {
         const float wet = wetMix.getNextValue();
@@ -285,8 +316,7 @@ void LibrEQAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
         preSpectrum.push(buffer.getArrayOfReadPointers(), numChannels, numSamples);
 
     const int solo = soloBand.load(std::memory_order_relaxed);
-    for (int i = 0; i < numBands; ++i)
-        eq.setBand(static_cast<std::size_t>(i), dspBand(i, solo));
+    pushBandsToIir(solo);
 
     wetMix.setTargetValue(bypassRaw->load() > 0.5f ? 0.0f : 1.0f);
     float target = juce::Decibels::decibelsToGain(outputRaw->load());
@@ -302,6 +332,7 @@ void LibrEQAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::
             modeGain.setTargetValue(0.0f);
             if (modeGain.getCurrentValue() <= 1.0e-4f) {
                 activeLinear = wantLinear;
+                pushBandsToIir(solo);
                 eq.reset();
                 linearPhase.reset();
                 modeGain.setTargetValue(1.0f);
@@ -374,6 +405,8 @@ void LibrEQAudioProcessor::getStateInformation(juce::MemoryBlock& dest) {
 
     juce::ValueTree extra(extraStateId);
     extra.setProperty("analyzerMode", analyzerMode.load(), nullptr);
+    extra.setProperty("displayRange", displayRange.load(), nullptr);
+    extra.setProperty("uiScale", uiScale.load(), nullptr);
     extra.setProperty("presetName", presetName, nullptr);
     extra.setProperty("activeSlot", activeSlot, nullptr);
     const auto& other = abSlots[static_cast<size_t>(1 - activeSlot)];
@@ -396,6 +429,8 @@ void LibrEQAudioProcessor::setStateInformation(const void* data, int size) {
     activeSlot = 0;
     if (const auto extra = state.getChildWithName(extraStateId); extra.isValid()) {
         analyzerMode.store(juce::jlimit(0, 2, static_cast<int>(extra.getProperty("analyzerMode", 2))));
+        displayRange.store(sanitiseRange(static_cast<int>(extra.getProperty("displayRange", 30))));
+        uiScale.store(sanitiseScale(static_cast<float>(extra.getProperty("uiScale", 1.0f))));
         presetName = extra.getProperty("presetName", "Init").toString();
         activeSlot = juce::jlimit(0, 1, static_cast<int>(extra.getProperty("activeSlot", 0)));
         if (const auto slot = extra.getChildWithName(slotStateId); slot.isValid())

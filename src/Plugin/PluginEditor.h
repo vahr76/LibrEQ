@@ -36,11 +36,15 @@ public:
     bool keyPressed(const juce::KeyPress&) override;
 
     void refresh();
-    void setSelected(int band);
+    void setSelected(int band); // Selects only this band, or nothing with -1.
     int getSelected() const { return selected; }
+    bool isMarked(int band) const { return band >= 0 && band < LibrEQAudioProcessor::numBands && marked[static_cast<size_t>(band)]; }
+    int numMarked() const;
+    void setRange(int db);
+    int getRange() const { return juce::roundToInt(rangeDb); }
     void setAnalyzerMode(AnalyzerMode);
     AnalyzerMode getAnalyzerMode() const { return analyzerMode; }
-    void removeSelectedBand() { removeBand(selected); }
+    void removeSelectedBand() { removeMarked(); }
 
     juce::Point<float> nodePosition(int band) const;
     juce::Point<float> qHandlePosition(int band) const;
@@ -55,6 +59,9 @@ private:
     bool hitsQHandle(juce::Point<float>) const;
     int addBand(juce::Point<float>);
     void removeBand(int);
+    void removeMarked();
+    void setPrimary(int band);
+    void anchorDrag(juce::Point<float> at, bool fine);
     void showBandMenu(int);
     float xToFrequency(float) const;
     float yToGain(float) const;
@@ -72,8 +79,12 @@ private:
     LibrEQAudioProcessor& processor;
     juce::SharedResourcePointer<libreq::UiFonts> fonts;
     int selected { -1 }, hovered { -1 };
-    bool dragging { false }, draggingQ { false };
-    float dragStartQ { 1.0f };
+    bool dragging { false }, draggingQ { false }, dragFine { false }, lassoActive { false };
+    float dragStartQ { 1.0f }, rangeDb { 30.0f };
+    juce::Point<float> dragOrigin, lassoStart;
+    juce::Rectangle<float> lasso;
+    std::array<bool, LibrEQAudioProcessor::numBands> marked {}, dragged {};
+    std::array<juce::Point<float>, LibrEQAudioProcessor::numBands> dragStart {}; // Frequency and gain at the anchor.
     juce::Point<float> cursor { -1.0f, -1.0f };
     AnalyzerMode analyzerMode { AnalyzerMode::InputOutput };
     std::array<libreq::Band, LibrEQAudioProcessor::numBands> cachedBands {};
@@ -106,6 +117,15 @@ public:
     juce::Colour accent { juce::Colours::white };
 };
 
+// Holds the whole interface, so it can be scaled as one piece.
+class EditorContent final : public juce::Component {
+public:
+    std::function<void(juce::Graphics&)> onPaint;
+    std::function<void()> onResize;
+    void paint(juce::Graphics& g) override { if (onPaint) onPaint(g); }
+    void resized() override { if (onResize) onResize(); }
+};
+
 class LibrEQAudioProcessorEditor final : public juce::AudioProcessorEditor, private juce::Timer {
 public:
     explicit LibrEQAudioProcessorEditor(LibrEQAudioProcessor&);
@@ -117,6 +137,9 @@ public:
     BandPanel& getPanel() { return panel; }
     OutputMeter& getMeter() { return meter; }
     void refreshNow() { timerCallback(); }
+    void applyScale(float scale);
+    void setRange(int db);
+    EditorContent& getContent() { return content; }
     juce::TextButton& getSoloButton() { return soloButton; }
 
 private:
@@ -126,6 +149,10 @@ private:
     void movePanel(bool immediately);
     void showAnalyzerMenu();
     void showPresetMenu();
+    void showRangeMenu();
+    void showSizeMenu();
+    void paintContent(juce::Graphics&);
+    void layoutContent();
     void updateHeader();
     void setAnalyzerMode(EqGraph::AnalyzerMode);
 
@@ -136,21 +163,23 @@ private:
     LibrEQAudioProcessor& processor;
     LibrEQLookAndFeel lookAndFeel;
     juce::SharedResourcePointer<libreq::UiFonts> fonts;
+    EditorContent content;
     EqGraph graph;
     OutputMeter meter;
     BandPanel panel;
     juce::TextButton analyzerButton, bypassButton { "Bypass" }, bandOnButton { "On" }, soloButton { "Solo" }, removeButton { "Remove" };
     juce::TextButton presetButton, slotAButton { "A" }, slotBButton { "B" }, slotCopyButton { "Copy" }, undoButton { "Undo" }, redoButton { "Redo" };
-    juce::TextButton phaseButton, autoGainButton { "Auto" };
-    juce::Slider outputKnob, scaleKnob, frequencyKnob, gainKnob, qKnob;
-    juce::Label outputLabel, scaleLabel, frequencyLabel, gainLabel, qLabel, bandLabel;
+    juce::TextButton phaseButton, autoGainButton { "Auto" }, rangeButton, sizeButton, dynamicButton { "Dynamic" };
+    juce::Slider outputKnob, scaleKnob, frequencyKnob, gainKnob, qKnob, thresholdKnob;
+    juce::Label outputLabel, scaleLabel, frequencyLabel, gainLabel, qLabel, thresholdLabel, bandLabel;
     juce::ComboBox typeBox, slopeBox, placementBox;
-    std::unique_ptr<SliderAttachment> outputAttachment, scaleAttachment, frequencyAttachment, gainAttachment, qAttachment;
-    std::unique_ptr<ButtonAttachment> bypassAttachment, autoGainAttachment, bandOnAttachment;
+    std::unique_ptr<SliderAttachment> outputAttachment, scaleAttachment, frequencyAttachment, gainAttachment, qAttachment, thresholdAttachment;
+    std::unique_ptr<ButtonAttachment> bypassAttachment, autoGainAttachment, bandOnAttachment, dynamicAttachment;
     std::unique_ptr<ComboAttachment> typeAttachment, slopeAttachment, placementAttachment;
     std::unique_ptr<juce::FileChooser> fileChooser;
     int boundBand { -2 };
     libreq::FilterType laidOutType { libreq::FilterType::Bell };
+    bool laidOutDynamic { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(LibrEQAudioProcessorEditor)
 };

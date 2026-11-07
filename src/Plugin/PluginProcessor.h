@@ -14,8 +14,8 @@ public:
     static constexpr int numBands = static_cast<int>(libreq::Equalizer::maxBands);
 
     struct BandParameters {
-        juce::RangedAudioParameter* used {}, * on {}, * type {}, * frequency {}, * gain {}, * q {}, * slope {}, * placement {};
-        std::atomic<float>* usedRaw {}, * onRaw {}, * typeRaw {}, * frequencyRaw {}, * gainRaw {}, * qRaw {}, * slopeRaw {}, * placementRaw {};
+        juce::RangedAudioParameter* used {}, * on {}, * type {}, * frequency {}, * gain {}, * q {}, * slope {}, * placement {}, * dynamic {}, * threshold {};
+        std::atomic<float>* usedRaw {}, * onRaw {}, * typeRaw {}, * frequencyRaw {}, * gainRaw {}, * qRaw {}, * slopeRaw {}, * placementRaw {}, * dynamicRaw {}, * thresholdRaw {};
     };
 
     LibrEQAudioProcessor();
@@ -46,6 +46,8 @@ public:
     bool isBandUsed(int index) const { return band(index).usedRaw->load() > 0.5f; }
     libreq::Band readBand(int index) const noexcept;       // The values as set by the user.
     libreq::Band scaledBand(int index) const noexcept;     // With the global scale applied.
+    // Gain a band applies right now, including dynamics. Safe to call from the UI.
+    float getLiveGainDb(int index) const noexcept { return eq.getLiveGainDb(static_cast<std::size_t>(index)); }
     float getScale() const noexcept { return scaleRaw->load() * 0.01f; }
     double currentSampleRate() const noexcept { return sampleRateForUi.load(); }
     bool isLinearPhase() const noexcept { return phaseRaw->load() > 0.5f; }
@@ -88,6 +90,10 @@ public:
     libreq::SpectrumTap preSpectrum, postSpectrum;
     std::atomic<bool> analyzerWanted { false };
     std::atomic<int> analyzerMode { 2 };
+    std::atomic<int> displayRange { 30 };   // Graph range in dB: 6, 12 or 30.
+    std::atomic<float> uiScale { 1.0f };    // Editor size: 0.75 to 1.5.
+    static int sanitiseRange(int range) { return range <= 6 ? 6 : range <= 12 ? 12 : 30; }
+    static float sanitiseScale(float scale) { return juce::jlimit(0.75f, 1.5f, std::isfinite(scale) ? scale : 1.0f); }
     std::atomic<int> soloBand { -1 };
 
 private:
@@ -117,7 +123,9 @@ private:
     Values decodeValues(const juce::ValueTree&) const;
     void resetHistory();
     void pushHistoryAfterProgramChange();
-    libreq::Band dspBand(int index, int solo) const noexcept;
+    enum class Engine { Iir, Fir, IirBesideFir };
+    libreq::Band dspBand(int index, int solo, Engine) const noexcept;
+    void pushBandsToIir(int solo) noexcept;
     float computeAutoGain() const;
     void processChunk(float* const* channels, int numChannels, int numSamples) noexcept;
 

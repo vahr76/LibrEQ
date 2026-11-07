@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <atomic>
 #include <cstddef>
 
 namespace libreq {
@@ -16,6 +17,9 @@ struct Band {
     float q { 0.707f };
     Slope slope { Slope::Db12 };
     Placement placement { Placement::Stereo };
+    // Dynamic bands apply up to gainDb only while the level in their range exceeds thresholdDb.
+    bool dynamic { false };
+    float thresholdDb { -24.0f };
     bool enabled { true };
 
     bool operator==(const Band&) const = default;
@@ -52,6 +56,14 @@ public:
     void setBand(std::size_t index, const Band& band) noexcept;
     void process(float* const* channels, int numChannels, int numSamples) noexcept;
 
+    // Gain a band is applying right now. Safe to read from any thread.
+    float getLiveGainDb(std::size_t index) const noexcept {
+        return index < maxBands ? liveGain[index].load(std::memory_order_relaxed) : 0.0f;
+    }
+
+    // How much of the overshoot above the threshold a dynamic band applies.
+    static constexpr double dynamicSlope = 0.75;
+
 private:
     static constexpr int chunkSize = 32;
 
@@ -61,17 +73,23 @@ private:
         Band current {};
         BandDesign design {};
         std::array<std::array<SectionState, 2>, 4> state {};
+        BandDesign detector {};
+        std::array<std::array<SectionState, 2>, 4> detectorState {};
+        double envelope { 0.0 };      // Smoothed power in the band's range.
+        double dynamicGainDb { 0.0 }; // Gain currently applied by a dynamic band.
         bool snap { true };
         bool moving { false };
         bool active { false };
     };
 
-    void redesign(Slot&) noexcept;
+    void redesign(Slot&, bool withDetector = true) noexcept;
     void advanceSmoothing() noexcept;
+    void updateDynamics(Slot&, std::array<std::array<double, chunkSize>, 2>& buffer, int first, int count, int n) noexcept;
 
     double sr { 44100.0 };
     double smoothing { 0.0 };
     std::array<Slot, maxBands> slots {};
+    std::array<std::atomic<float>, maxBands> liveGain {};
 };
 
 } // namespace libreq
