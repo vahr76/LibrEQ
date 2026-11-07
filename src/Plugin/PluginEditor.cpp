@@ -10,7 +10,7 @@ const juce::Colour preSpectrum { 0xff536273 }, postSpectrum { 0xff49b9a4 };
 const juce::Colour meterHot { 0xfff0a95b }, meterClip { 0xffef5b5b };
 } // namespace colours
 
-constexpr float minFrequency = 20.0f, maxFrequency = 20000.0f, graphDb = 30.0f;
+constexpr float minFrequency = 20.0f, maxFrequency = 20000.0f;
 constexpr float spectrumTop = 0.0f, spectrumBottom = -90.0f, spectrumTiltPerOctave = 4.5f;
 constexpr float axisRight = 34.0f, axisBottom = 20.0f;
 constexpr float nodeRadius = 10.0f, qRingRadius = 27.0f;
@@ -192,12 +192,12 @@ float EqGraph::xToFrequency(float x) const {
 
 float EqGraph::gainToY(float db) const {
     const auto r = plot();
-    return juce::jmap(db, graphDb, -graphDb, r.getY(), r.getBottom());
+    return juce::jmap(db, rangeDb, -rangeDb, r.getY(), r.getBottom());
 }
 
 float EqGraph::yToGain(float y) const {
     const auto r = plot();
-    return juce::jlimit(-graphDb, graphDb, juce::jmap(y, r.getY(), r.getBottom(), graphDb, -graphDb));
+    return juce::jlimit(-rangeDb, rangeDb, juce::jmap(y, r.getY(), r.getBottom(), rangeDb, -rangeDb));
 }
 
 float EqGraph::dbToSpectrumY(float db) const {
@@ -207,7 +207,10 @@ float EqGraph::dbToSpectrumY(float db) const {
 
 juce::Point<float> EqGraph::nodePosition(int band) const {
     const auto settings = processor.scaledBand(band);
-    return { frequencyToX(settings.frequency), gainToY(libreq::usesGain(settings.type) ? settings.gainDb : 0.0f) };
+    const auto r = plot();
+    // Bands beyond the visible range sit on its edge, and can still be dragged.
+    const float y = gainToY(libreq::usesGain(settings.type) ? settings.gainDb : 0.0f);
+    return { frequencyToX(settings.frequency), juce::jlimit(r.getY() + 3.0f, r.getBottom() - 3.0f, y) };
 }
 
 juce::Point<float> EqGraph::qHandlePosition(int band) const {
@@ -232,7 +235,9 @@ int EqGraph::hitTestNode(juce::Point<float> position) const {
     return nearest;
 }
 
-void EqGraph::setSelected(int band) {
+void EqGraph::setPrimary(int band) {
+    if (band < 0)
+        marked.fill(false);
     if (band == selected)
         return;
     selected = band;
@@ -240,6 +245,27 @@ void EqGraph::setSelected(int band) {
     repaint();
     if (onSelectionChanged)
         onSelectionChanged(selected);
+}
+
+void EqGraph::setSelected(int band) {
+    marked.fill(false);
+    if (band >= 0)
+        marked[static_cast<size_t>(band)] = true;
+    setPrimary(band);
+    repaint();
+}
+
+int EqGraph::numMarked() const {
+    int count = 0;
+    for (bool m : marked)
+        count += m ? 1 : 0;
+    return count;
+}
+
+void EqGraph::setRange(int db) {
+    rangeDb = static_cast<float>(LibrEQAudioProcessor::sanitiseRange(db));
+    curvesDirty = true;
+    repaint();
 }
 
 void EqGraph::setAnalyzerMode(AnalyzerMode mode) {
@@ -272,9 +298,28 @@ void EqGraph::removeBand(int band) {
     if (band < 0)
         return;
     setPlainGesture(processor.band(band).used, 0.0f);
+    marked[static_cast<size_t>(band)] = false;
     if (selected == band)
         setSelected(-1);
     hovered = -1;
+}
+
+void EqGraph::removeMarked() {
+    auto toRemove = marked;
+    if (selected >= 0)
+        toRemove[static_cast<size_t>(selected)] = true;
+    for (int i = 0; i < LibrEQAudioProcessor::numBands; ++i)
+        if (toRemove[static_cast<size_t>(i)])
+            removeBand(i);
+    setSelected(-1);
+}
+
+void EqGraph::anchorDrag(juce::Point<float> at, bool fine) {
+    dragOrigin = at;
+    dragFine = fine;
+    for (int i = 0; i < LibrEQAudioProcessor::numBands; ++i)
+        if (dragged[static_cast<size_t>(i)])
+            dragStart[static_cast<size_t>(i)] = { processor.band(i).frequencyRaw->load(), processor.band(i).gainRaw->load() };
 }
 
 void EqGraph::showBandMenu(int band) {
@@ -318,6 +363,7 @@ void EqGraph::mouseExit(const juce::MouseEvent&) {
 
 void EqGraph::mouseDown(const juce::MouseEvent& e) {
     grabKeyboardFocus();
+    lassoActive = false;
     if (! e.mods.isPopupMenu() && hitsQHandle(e.position)) {
         draggingQ = true;
         dragStartQ = processor.readBand(selected).q;
@@ -326,9 +372,37 @@ void EqGraph::mouseDown(const juce::MouseEvent& e) {
     }
 
     const int hit = hitTestNode(e.position);
-    setSelected(hit);
-    if (hit < 0)
+    if (hit < 0) {
+        setSelected(-1);
+        if (! e.mods.isPopupMenu() && plot().contains(e.position)) {
+            lassoActive = true;
+            lassoStart = e.position;
+            lasso = {};
+        }
         return;
+    }
+
+    const auto index = static_cast<size_t>(hit);
+    if (e.mods.isCommandDown() && ! e.mods.isPopupMenu()) {
+        // Ctrl-click (Cmd on macOS) adds or removes a band from the selection.
+        marked[index] = ! marked[index];
+        if (marked[index]) {
+            setPrimary(hit);
+        } else if (hit == selected) {
+            int next = -1;
+            for (int i = 0; i < LibrEQAudioProcessor::numBands && next < 0; ++i)
+                if (marked[static_cast<size_t>(i)])
+                    next = i;
+            setPrimary(next);
+        }
+        repaint();
+        return;
+    }
+
+    if (! marked[index])
+        setSelected(hit);
+    else
+        setPrimary(hit);
 
     const auto& p = processor.band(hit);
     if (e.mods.isPopupMenu()) {
@@ -339,13 +413,25 @@ void EqGraph::mouseDown(const juce::MouseEvent& e) {
         setPlainGesture(p.on, p.onRaw->load() > 0.5f ? 0.0f : 1.0f);
         return;
     }
-    p.frequency->beginChangeGesture();
-    p.gain->beginChangeGesture();
+
+    dragged = marked;
+    for (int i = 0; i < LibrEQAudioProcessor::numBands; ++i) {
+        if (! dragged[static_cast<size_t>(i)])
+            continue;
+        processor.band(i).frequency->beginChangeGesture();
+        processor.band(i).gain->beginChangeGesture();
+    }
+    anchorDrag(e.position, e.mods.isShiftDown());
     dragging = true;
 }
 
 void EqGraph::mouseDrag(const juce::MouseEvent& e) {
     cursor = e.position;
+    if (lassoActive) {
+        lasso = juce::Rectangle<float>(lassoStart, e.position);
+        repaint();
+        return;
+    }
     if (draggingQ && selected >= 0) {
         const auto offset = e.getOffsetFromDragStart().toFloat();
         const float q = dragStartQ * std::pow(2.0f, (offset.x - offset.y) / 70.0f);
@@ -353,16 +439,51 @@ void EqGraph::mouseDrag(const juce::MouseEvent& e) {
         repaint();
         return;
     }
-    if (! dragging || selected < 0)
+    if (! dragging)
         return;
-    const auto& p = processor.band(selected);
-    setPlain(p.frequency, xToFrequency(e.position.x));
-    if (libreq::usesGain(processor.readBand(selected).type))
-        setPlain(p.gain, juce::jlimit(-30.0f, 30.0f, yToGain(e.position.y) / juce::jmax(0.05f, processor.getScale())));
+
+    // Moves are relative to where the drag started, and Shift makes them finer.
+    const bool fine = e.mods.isShiftDown();
+    if (fine != dragFine)
+        anchorDrag(e.position, fine);
+    const auto r = plot();
+    const auto delta = e.position - dragOrigin;
+    const float amount = fine ? 0.15f : 1.0f;
+    const float octaves = delta.x / r.getWidth() * amount;
+    const float gainDelta = -delta.y / r.getHeight() * 2.0f * rangeDb * amount / juce::jmax(0.05f, processor.getScale());
+
+    for (int i = 0; i < LibrEQAudioProcessor::numBands; ++i) {
+        if (! dragged[static_cast<size_t>(i)])
+            continue;
+        const auto start = dragStart[static_cast<size_t>(i)];
+        const auto& p = processor.band(i);
+        setPlain(p.frequency, juce::jlimit(minFrequency, maxFrequency, start.x * std::pow(maxFrequency / minFrequency, octaves)));
+        if (libreq::usesGain(processor.readBand(i).type))
+            setPlain(p.gain, juce::jlimit(-30.0f, 30.0f, start.y + gainDelta));
+    }
     repaint();
 }
 
 void EqGraph::mouseUp(const juce::MouseEvent&) {
+    if (lassoActive) {
+        lassoActive = false;
+        // A plain click on empty space only clears the selection.
+        if (lasso.getWidth() > 4.0f || lasso.getHeight() > 4.0f) {
+            int first = -1;
+            for (int i = 0; i < LibrEQAudioProcessor::numBands; ++i) {
+                const bool inside = processor.isBandUsed(i) && lasso.contains(nodePosition(i));
+                marked[static_cast<size_t>(i)] = inside;
+                if (inside && first < 0)
+                    first = i;
+            }
+            const auto chosen = marked;
+            setPrimary(first);
+            marked = chosen;
+        }
+        lasso = {};
+        repaint();
+        return;
+    }
     if (draggingQ) {
         draggingQ = false;
         if (selected >= 0)
@@ -372,13 +493,17 @@ void EqGraph::mouseUp(const juce::MouseEvent&) {
     if (! dragging)
         return;
     dragging = false;
-    if (selected >= 0) {
-        processor.band(selected).frequency->endChangeGesture();
-        processor.band(selected).gain->endChangeGesture();
+    for (int i = 0; i < LibrEQAudioProcessor::numBands; ++i) {
+        if (! dragged[static_cast<size_t>(i)])
+            continue;
+        processor.band(i).frequency->endChangeGesture();
+        processor.band(i).gain->endChangeGesture();
     }
+    dragged.fill(false);
 }
 
 void EqGraph::mouseDoubleClick(const juce::MouseEvent& e) {
+    lassoActive = false;
     if (e.mods.isPopupMenu())
         return;
     if (const int hit = hitTestNode(e.position); hit >= 0)
@@ -411,7 +536,20 @@ bool EqGraph::keyPressed(const juce::KeyPress& key) {
         return true;
     }
     if ((key == juce::KeyPress::deleteKey || key == juce::KeyPress::backspaceKey) && selected >= 0) {
-        removeBand(selected);
+        removeMarked();
+        return true;
+    }
+    if (key.getModifiers().isCommandDown() && (key.getKeyCode() == 'a' || key.getKeyCode() == 'A')) {
+        int first = -1;
+        for (int i = 0; i < LibrEQAudioProcessor::numBands; ++i) {
+            marked[static_cast<size_t>(i)] = processor.isBandUsed(i);
+            if (marked[static_cast<size_t>(i)] && first < 0)
+                first = i;
+        }
+        const auto chosen = marked;
+        setPrimary(first);
+        marked = chosen;
+        repaint();
         return true;
     }
     return false;
@@ -493,16 +631,31 @@ void EqGraph::refresh() {
     const double rate = processor.currentSampleRate();
     const auto r = plot();
     const int width = juce::jmax(1, static_cast<int>(r.getWidth()));
-    bool changed = curvesDirty || ! juce::exactlyEqual(rate, cachedRate);
+    const bool everything = curvesDirty || ! juce::exactlyEqual(rate, cachedRate);
+    bool changed = everything;
 
     for (int i = 0; i < LibrEQAudioProcessor::numBands; ++i) {
         const auto index = static_cast<size_t>(i);
-        const auto settings = processor.scaledBand(i);
+        auto settings = processor.scaledBand(i);
+        // Dynamic bands are drawn with the gain they apply at this moment.
+        if (settings.dynamic && libreq::usesGain(settings.type))
+            settings.gainDb = settings.enabled ? processor.getLiveGainDb(i) : 0.0f;
         const bool used = processor.isBandUsed(i);
-        if (! (settings == cachedBands[index]) || used != cachedUsed[index]) {
+        auto& curve = bandCurves[index];
+        if (everything || ! (settings == cachedBands[index]) || used != cachedUsed[index]) {
             cachedBands[index] = settings;
             cachedUsed[index] = used;
             changed = true;
+            if (! used) {
+                curve.clear();
+            } else {
+                curve.resize(static_cast<size_t>(width));
+                const auto design = libreq::designBand(settings, rate);
+                for (int px = 0; px < width; ++px) {
+                    const auto f = static_cast<double>(xToFrequency(r.getX() + static_cast<float>(px)));
+                    curve[static_cast<size_t>(px)] = static_cast<float>(libreq::magnitudeDb(design, f, rate));
+                }
+            }
         }
         nodeAppear[index] += ((used ? 1.0f : 0.0f) - nodeAppear[index]) * 0.35f;
     }
@@ -523,25 +676,18 @@ void EqGraph::refresh() {
             secondaryCurve.assign(static_cast<size_t>(width), 0.0f);
         for (int i = 0; i < LibrEQAudioProcessor::numBands; ++i) {
             const auto index = static_cast<size_t>(i);
-            auto& curve = bandCurves[index];
-            if (! cachedUsed[index]) {
-                curve.clear();
+            const auto& curve = bandCurves[index];
+            if (curve.size() != static_cast<size_t>(width) || ! cachedBands[index].enabled)
                 continue;
-            }
-            curve.resize(static_cast<size_t>(width));
-            const auto design = libreq::designBand(cachedBands[index], rate);
-            for (int px = 0; px < width; ++px) {
-                const auto f = static_cast<double>(xToFrequency(r.getX() + static_cast<float>(px)));
-                curve[static_cast<size_t>(px)] = static_cast<float>(libreq::magnitudeDb(design, f, rate));
-                if (! cachedBands[index].enabled)
-                    continue;
-                // The main curve shows left or mid; a second one appears for right or side.
-                const auto placement = cachedBands[index].placement;
-                const auto value = curve[static_cast<size_t>(px)];
-                if (placement == libreq::Placement::Stereo || placement == libreq::Placement::Left || placement == libreq::Placement::Mid)
-                    totalCurve[static_cast<size_t>(px)] += value;
-                if (hasSecondary && (placement == libreq::Placement::Stereo || placement == libreq::Placement::Right || placement == libreq::Placement::Side))
-                    secondaryCurve[static_cast<size_t>(px)] += value;
+            // The main curve shows left or mid; a second one appears for right or side.
+            const auto placement = cachedBands[index].placement;
+            const bool main = placement == libreq::Placement::Stereo || placement == libreq::Placement::Left || placement == libreq::Placement::Mid;
+            const bool second = hasSecondary && (placement == libreq::Placement::Stereo || placement == libreq::Placement::Right || placement == libreq::Placement::Side);
+            for (size_t px = 0; px < curve.size(); ++px) {
+                if (main)
+                    totalCurve[px] += curve[px];
+                if (second)
+                    secondaryCurve[px] += curve[px];
             }
         }
     }
@@ -565,7 +711,8 @@ void EqGraph::drawGrid(juce::Graphics& g) const {
         g.setColour(major ? colours::gridMajor : colours::gridMinor);
         g.drawVerticalLine(juce::roundToInt(frequencyToX(f)), r.getY(), r.getBottom());
     }
-    for (int db = -24; db <= 24; db += 12) {
+    const int range = getRange(), step = range == 6 ? 2 : range == 12 ? 3 : 12;
+    for (int db = -((range - 1) / step) * step; db < range; db += step) {
         g.setColour(db == 0 ? colours::zero : colours::gridMinor);
         g.drawHorizontalLine(juce::roundToInt(gainToY(static_cast<float>(db))), r.getX(), r.getRight());
     }
@@ -638,6 +785,22 @@ void EqGraph::drawNodes(juce::Graphics& g) const {
         const bool enabled = settings.enabled || ! used;
         const auto colour = enabled ? bandColour(i) : colours::textDim;
         const bool isSelected = i == selected && used, active = isSelected || i == hovered;
+        const bool inGroup = used && marked[static_cast<size_t>(i)] && ! isSelected;
+        const bool dynamic = used && settings.dynamic && libreq::usesGain(settings.type);
+
+        if (dynamic && settings.enabled) {
+            // A bar from the static gain to the gain applied right now.
+            const float liveY = juce::jlimit(r.getY(), r.getBottom(), gainToY(cachedBands[static_cast<size_t>(i)].gainDb));
+            g.setColour(colour.withAlpha(0.35f * appear));
+            g.drawLine(position.x, gainToY(0.0f), position.x, position.y, 1.5f);
+            g.setColour(colour.withAlpha(0.95f * appear));
+            g.drawLine(position.x, gainToY(0.0f), position.x, liveY, 3.0f);
+            g.fillEllipse(juce::Rectangle<float>(7.0f, 7.0f).withCentre({ position.x, liveY }));
+        }
+        if (inGroup) {
+            g.setColour(colours::text.withAlpha(0.85f));
+            g.drawEllipse(juce::Rectangle<float>(28.0f, 28.0f).withCentre(position), 1.5f);
+        }
         const float radius = nodeRadius * appear * (active ? 1.08f : 1.0f);
 
         if (isSelected) {
@@ -684,8 +847,10 @@ void EqGraph::drawNodes(juce::Graphics& g) const {
             if (libreq::usesGain(settings.type))
                 info << "   " << (settings.gainDb > 0.0f ? "+" : "") << juce::String(settings.gainDb, 1) << " dB";
             info << "   Q " << juce::String(settings.q, 2);
+            if (dynamic)
+                info << "   Dyn " << juce::String(settings.thresholdDb, 0) << " dB";
             const bool below = position.y - r.getY() < 74.0f;
-            auto box = juce::Rectangle<float>(162.0f, 22.0f).withCentre(position.translated(0.0f, below ? 48.0f : -48.0f));
+            auto box = juce::Rectangle<float>(dynamic ? 222.0f : 162.0f, 22.0f).withCentre(position.translated(0.0f, below ? 48.0f : -48.0f));
             box.setX(juce::jlimit(r.getX() + 4.0f, r.getRight() - box.getWidth() - 4.0f, box.getX()));
             g.setColour(colours::panelRaised.withAlpha(0.94f));
             g.fillRoundedRectangle(box, 5.0f);
@@ -727,7 +892,8 @@ void EqGraph::drawAxes(juce::Graphics& g) const {
     const auto r = plot();
     g.setFont(fonts->regular(10.5f));
     g.setColour(colours::textDim);
-    for (int db = -24; db <= 24; db += 12) {
+    const int range = getRange(), labelStep = range == 6 ? 2 : range == 12 ? 6 : 12;
+    for (int db = -((range - 1) / labelStep) * labelStep; db < range; db += labelStep) {
         const auto y = gainToY(static_cast<float>(db));
         g.drawText((db > 0 ? "+" : "") + juce::String(db), juce::Rectangle<float>(r.getRight() + 3.0f, y - 8.0f, axisRight - 7.0f, 16.0f), juce::Justification::centredRight);
     }
@@ -777,11 +943,17 @@ void EqGraph::paint(juce::Graphics& g) {
         g.drawText("Double-click to add a band", hint.translated(0.0f, -12.0f), juce::Justification::centred);
         g.setColour(colours::textDim);
         g.setFont(fonts->regular(12.0f));
-        g.drawText("Drag nodes   |   Scroll or use the ring for Q   |   Alt-click toggles   |   Right-click for options", hint.translated(0.0f, 14.0f), juce::Justification::centred);
+        g.drawText("Drag nodes (Shift for fine)   |   Scroll or ring for Q   |   Drag on empty space to select several   |   Right-click for options", hint.translated(0.0f, 14.0f), juce::Justification::centred);
     }
 
     drawCursor(g);
     drawNodes(g);
+    if (lassoActive && ! lasso.isEmpty()) {
+        g.setColour(colours::accent.withAlpha(0.1f));
+        g.fillRect(lasso);
+        g.setColour(colours::accent.withAlpha(0.7f));
+        g.drawRect(lasso, 1.0f);
+    }
     g.restoreState();
     drawAxes(g);
 }
@@ -851,9 +1023,12 @@ void BandPanel::paint(juce::Graphics& g) {
 
 LibrEQAudioProcessorEditor::LibrEQAudioProcessorEditor(LibrEQAudioProcessor& p) : AudioProcessorEditor(p), processor(p), graph(p) {
     setLookAndFeel(&lookAndFeel);
-    addAndMakeVisible(graph);
-    addAndMakeVisible(meter);
-    addChildComponent(panel);
+    addAndMakeVisible(content);
+    content.onPaint = [this](juce::Graphics& g) { paintContent(g); };
+    content.onResize = [this] { layoutContent(); };
+    content.addAndMakeVisible(graph);
+    content.addAndMakeVisible(meter);
+    content.addChildComponent(panel);
     graph.onSelectionChanged = [this](int band) { bindBand(band); };
 
     const auto setupKnob = [this](juce::Component& parent, juce::Slider& knob, juce::Label& label, const juce::String& name, juce::Slider::TextEntryBoxPosition box, int boxWidth) {
@@ -867,7 +1042,7 @@ LibrEQAudioProcessorEditor::LibrEQAudioProcessorEditor(LibrEQAudioProcessor& p) 
         parent.addAndMakeVisible(knob);
         parent.addAndMakeVisible(label);
     };
-    setupKnob(*this, outputKnob, outputLabel, "Output", juce::Slider::TextBoxRight, 56);
+    setupKnob(content, outputKnob, outputLabel, "Output", juce::Slider::TextBoxRight, 56);
     setupKnob(panel, frequencyKnob, frequencyLabel, "Frequency", juce::Slider::TextBoxBelow, 78);
     setupKnob(panel, gainKnob, gainLabel, "Gain", juce::Slider::TextBoxBelow, 78);
     setupKnob(panel, qKnob, qLabel, "Q", juce::Slider::TextBoxBelow, 78);
@@ -880,40 +1055,40 @@ LibrEQAudioProcessorEditor::LibrEQAudioProcessorEditor(LibrEQAudioProcessor& p) 
         button->setClickingTogglesState(true);
         button->setColour(juce::TextButton::buttonOnColourId, colours::accent);
     }
-    addAndMakeVisible(bypassButton);
+    content.addAndMakeVisible(bypassButton);
     panel.addAndMakeVisible(bandOnButton);
     bypassButton.setColour(juce::TextButton::buttonOnColourId, colours::meterHot);
     bypassAttachment = std::make_unique<ButtonAttachment>(processor.parameters, "bypass", bypassButton);
 
-    addAndMakeVisible(analyzerButton);
+    content.addAndMakeVisible(analyzerButton);
     analyzerButton.onClick = [this] { showAnalyzerMenu(); };
     setAnalyzerMode(static_cast<EqGraph::AnalyzerMode>(juce::jlimit(0, 2, processor.analyzerMode.load())));
 
-    setupKnob(*this, scaleKnob, scaleLabel, "Scale", juce::Slider::TextBoxRight, 50);
+    setupKnob(content, scaleKnob, scaleLabel, "Scale", juce::Slider::TextBoxRight, 50);
     scaleKnob.setTextValueSuffix(" %");
     scaleAttachment = std::make_unique<SliderAttachment>(processor.parameters, "scale", scaleKnob);
 
     autoGainButton.setClickingTogglesState(true);
     autoGainButton.setColour(juce::TextButton::buttonOnColourId, colours::accent);
-    addAndMakeVisible(autoGainButton);
+    content.addAndMakeVisible(autoGainButton);
     autoGainAttachment = std::make_unique<ButtonAttachment>(processor.parameters, "autogain", autoGainButton);
 
-    addAndMakeVisible(phaseButton);
+    content.addAndMakeVisible(phaseButton);
     phaseButton.onClick = [this] { setPlainGesture(processor.getPhaseParameter(), processor.isLinearPhase() ? 0.0f : 1.0f); updateHeader(); };
 
-    addAndMakeVisible(presetButton);
+    content.addAndMakeVisible(presetButton);
     presetButton.onClick = [this] { showPresetMenu(); };
     for (auto* button : { &slotAButton, &slotBButton }) {
         button->setColour(juce::TextButton::buttonOnColourId, colours::accent);
-        addAndMakeVisible(*button);
+        content.addAndMakeVisible(*button);
     }
     slotAButton.onClick = [this] { processor.switchSlot(0); updateHeader(); };
     slotBButton.onClick = [this] { processor.switchSlot(1); updateHeader(); };
-    addAndMakeVisible(slotCopyButton);
+    content.addAndMakeVisible(slotCopyButton);
     slotCopyButton.onClick = [this] { processor.copyToOtherSlot(); };
-    addAndMakeVisible(undoButton);
+    content.addAndMakeVisible(undoButton);
     undoButton.onClick = [this] { processor.undo(); updateHeader(); };
-    addAndMakeVisible(redoButton);
+    content.addAndMakeVisible(redoButton);
     redoButton.onClick = [this] { processor.redo(); updateHeader(); };
 
     soloButton.setClickingTogglesState(true);
@@ -938,9 +1113,21 @@ LibrEQAudioProcessorEditor::LibrEQAudioProcessorEditor(LibrEQAudioProcessor& p) 
     bandLabel.setJustificationType(juce::Justification::centred);
     panel.addAndMakeVisible(bandLabel);
 
+    setupKnob(panel, thresholdKnob, thresholdLabel, "Threshold", juce::Slider::TextBoxBelow, 78);
+    thresholdKnob.setTextValueSuffix(" dB");
+    dynamicButton.setClickingTogglesState(true);
+    panel.addAndMakeVisible(dynamicButton);
+
+    graph.setRange(processor.displayRange.load());
+    content.addAndMakeVisible(rangeButton);
+    rangeButton.onClick = [this] { showRangeMenu(); };
+    content.addAndMakeVisible(sizeButton);
+    sizeButton.onClick = [this] { showSizeMenu(); };
+
     setResizable(true, true);
-    setResizeLimits(1120, 520, 2400, 1500);
-    setSize(1160, 680);
+    const float scale = LibrEQAudioProcessor::sanitiseScale(processor.uiScale.load());
+    setResizeLimits(juce::roundToInt(1120 * scale), juce::roundToInt(520 * scale), juce::roundToInt(2400 * scale), juce::roundToInt(1500 * scale));
+    setSize(juce::roundToInt(1160 * scale), juce::roundToInt(680 * scale));
     bindBand(-1);
     startTimerHz(30);
 }
@@ -1022,7 +1209,49 @@ void LibrEQAudioProcessorEditor::showPresetMenu() {
                        });
 }
 
+void LibrEQAudioProcessorEditor::setRange(int db) {
+    graph.setRange(db);
+    processor.displayRange.store(graph.getRange());
+    updateHeader();
+}
+
+void LibrEQAudioProcessorEditor::applyScale(float scale) {
+    scale = LibrEQAudioProcessor::sanitiseScale(scale);
+    const float previous = LibrEQAudioProcessor::sanitiseScale(processor.uiScale.load());
+    processor.uiScale.store(scale);
+    const auto contentSize = juce::Point<float>(static_cast<float>(getWidth()), static_cast<float>(getHeight())) / previous;
+    setResizeLimits(juce::roundToInt(1120 * scale), juce::roundToInt(520 * scale), juce::roundToInt(2400 * scale), juce::roundToInt(1500 * scale));
+    setSize(juce::roundToInt(contentSize.x * scale), juce::roundToInt(contentSize.y * scale));
+    resized();
+    updateHeader();
+}
+
+void LibrEQAudioProcessorEditor::showRangeMenu() {
+    juce::PopupMenu menu;
+    for (int db : { 6, 12, 30 })
+        menu.addItem(db, juce::String(juce::CharPointer_UTF8("\xc2\xb1")) + juce::String(db) + " dB", true, graph.getRange() == db);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&rangeButton),
+                       [safe = juce::Component::SafePointer<LibrEQAudioProcessorEditor>(this)](int result) {
+                           if (safe != nullptr && result > 0)
+                               safe->setRange(result);
+                       });
+}
+
+void LibrEQAudioProcessorEditor::showSizeMenu() {
+    juce::PopupMenu menu;
+    const float current = processor.uiScale.load();
+    for (int percent : { 75, 90, 100, 125, 150 })
+        menu.addItem(percent, juce::String(percent) + " %", true, juce::roundToInt(current * 100.0f) == percent);
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&sizeButton),
+                       [safe = juce::Component::SafePointer<LibrEQAudioProcessorEditor>(this)](int result) {
+                           if (safe != nullptr && result > 0)
+                               safe->applyScale(static_cast<float>(result) / 100.0f);
+                       });
+}
+
 void LibrEQAudioProcessorEditor::updateHeader() {
+    rangeButton.setButtonText(juce::String(juce::CharPointer_UTF8("\xc2\xb1")) + juce::String(graph.getRange()) + " dB");
+    sizeButton.setButtonText(juce::String(juce::roundToInt(processor.uiScale.load() * 100.0f)) + " %");
     presetButton.setButtonText(processor.getPresetName());
     slotAButton.setToggleState(processor.getActiveSlot() == 0, juce::dontSendNotification);
     slotBButton.setToggleState(processor.getActiveSlot() == 1, juce::dontSendNotification);
@@ -1037,8 +1266,11 @@ void LibrEQAudioProcessorEditor::timerCallback() {
     updateHeader();
     if (const int band = graph.getSelected(); band >= 0 && ! processor.isBandUsed(band))
         graph.setSelected(-1);
-    if (const int band = graph.getSelected(); band >= 0 && processor.readBand(band).type != laidOutType)
-        layoutPanel();
+    if (const int band = graph.getSelected(); band >= 0) {
+        const auto settings = processor.readBand(band);
+        if (settings.type != laidOutType || settings.dynamic != laidOutDynamic)
+            layoutPanel();
+    }
     graph.refresh();
     meter.update(processor.takeOutputPeaks());
     movePanel(false);
@@ -1057,6 +1289,8 @@ void LibrEQAudioProcessorEditor::bindBand(int band) {
     bandOnAttachment.reset();
     typeAttachment.reset();
     slopeAttachment.reset();
+    dynamicAttachment.reset();
+    thresholdAttachment.reset();
 
     panel.setVisible(band >= 0);
     if (band < 0)
@@ -1070,14 +1304,17 @@ void LibrEQAudioProcessorEditor::bindBand(int band) {
     typeAttachment = std::make_unique<ComboAttachment>(processor.parameters, id("type"), typeBox);
     slopeAttachment = std::make_unique<ComboAttachment>(processor.parameters, id("slope"), slopeBox);
     placementAttachment = std::make_unique<ComboAttachment>(processor.parameters, id("placement"), placementBox);
+    dynamicAttachment = std::make_unique<ButtonAttachment>(processor.parameters, id("dyn"), dynamicButton);
+    thresholdAttachment = std::make_unique<SliderAttachment>(processor.parameters, id("thresh"), thresholdKnob);
 
     const auto colour = bandColour(band);
     bandLabel.setText("Band " + juce::String(band + 1), juce::dontSendNotification);
     bandLabel.setColour(juce::Label::textColourId, colour);
     panel.accent = colour;
-    for (auto* knob : { &frequencyKnob, &gainKnob, &qKnob })
+    for (auto* knob : { &frequencyKnob, &gainKnob, &qKnob, &thresholdKnob })
         knob->setColour(juce::Slider::rotarySliderFillColourId, colour);
     bandOnButton.setColour(juce::TextButton::buttonOnColourId, colour);
+    dynamicButton.setColour(juce::TextButton::buttonOnColourId, colour);
 
     layoutPanel();
     movePanel(true);
@@ -1088,15 +1325,21 @@ void LibrEQAudioProcessorEditor::layoutPanel() {
     if (band < 0)
         return;
 
-    laidOutType = processor.readBand(band).type;
+    const auto settings = processor.readBand(band);
+    laidOutType = settings.type;
+    laidOutDynamic = settings.dynamic;
     const bool showGain = libreq::usesGain(laidOutType);
     const bool showSlope = libreq::usesSlope(laidOutType);
+    const bool showThreshold = showGain && laidOutDynamic;
     gainKnob.setVisible(showGain);
     gainLabel.setVisible(showGain);
     slopeBox.setVisible(showSlope);
+    dynamicButton.setVisible(showGain);
+    thresholdKnob.setVisible(showThreshold);
+    thresholdLabel.setVisible(showThreshold);
 
     constexpr int pad = 10, gap = 10, knobWidth = 80, columnWidth = 84, choiceWidth = 112;
-    const int numKnobs = showGain ? 3 : 2;
+    const int numKnobs = 2 + (showGain ? 1 : 0) + (showThreshold ? 1 : 0);
     panel.setSize(pad * 2 + columnWidth + choiceWidth + gap * 2 + numKnobs * knobWidth, panelHeight);
 
     auto area = panel.getLocalBounds().reduced(pad, 8);
@@ -1112,7 +1355,7 @@ void LibrEQAudioProcessorEditor::layoutPanel() {
     area.removeFromLeft(gap);
 
     auto choices = area.removeFromLeft(choiceWidth);
-    const int rows = showSlope ? 3 : 2;
+    const int rows = showSlope || showGain ? 3 : 2;
     const int rowHeight = 26, rowGap = 3;
     choices.removeFromTop((choices.getHeight() - (rows * rowHeight + (rows - 1) * rowGap)) / 2);
     typeBox.setBounds(choices.removeFromTop(rowHeight));
@@ -1122,6 +1365,10 @@ void LibrEQAudioProcessorEditor::layoutPanel() {
         choices.removeFromTop(rowGap);
     }
     placementBox.setBounds(choices.removeFromTop(rowHeight));
+    if (showGain) {
+        choices.removeFromTop(rowGap);
+        dynamicButton.setBounds(choices.removeFromTop(rowHeight));
+    }
     area.removeFromLeft(gap);
 
     const auto place = [&area](juce::Slider& knob, juce::Label& label) {
@@ -1133,6 +1380,8 @@ void LibrEQAudioProcessorEditor::layoutPanel() {
     if (showGain)
         place(gainKnob, gainLabel);
     place(qKnob, qLabel);
+    if (showThreshold)
+        place(thresholdKnob, thresholdLabel);
 }
 
 void LibrEQAudioProcessorEditor::movePanel(bool immediately) {
@@ -1160,8 +1409,12 @@ void LibrEQAudioProcessorEditor::movePanel(bool immediately) {
 
 void LibrEQAudioProcessorEditor::paint(juce::Graphics& g) {
     g.fillAll(colours::window);
+}
+
+void LibrEQAudioProcessorEditor::paintContent(juce::Graphics& g) {
+    g.fillAll(colours::window);
     g.setColour(colours::panelRaised.withAlpha(0.55f));
-    g.fillRect(0, 45, getWidth(), 1);
+    g.fillRect(0, 45, content.getWidth(), 1);
     g.setFont(fonts->bold(21.0f));
     g.setColour(colours::text);
     g.drawText("Libr", 16, 0, 44, 46, juce::Justification::centredLeft);
@@ -1171,7 +1424,13 @@ void LibrEQAudioProcessorEditor::paint(juce::Graphics& g) {
 }
 
 void LibrEQAudioProcessorEditor::resized() {
-    auto area = getLocalBounds();
+    const float scale = LibrEQAudioProcessor::sanitiseScale(processor.uiScale.load());
+    content.setTransform(juce::AffineTransform::scale(scale));
+    content.setBounds(0, 0, juce::roundToInt(static_cast<float>(getWidth()) / scale), juce::roundToInt(static_cast<float>(getHeight()) / scale));
+}
+
+void LibrEQAudioProcessorEditor::layoutContent() {
+    auto area = content.getLocalBounds();
     auto header = area.removeFromTop(46).reduced(10, 8);
     meter.setBounds(area.removeFromRight(meterWidth));
     graph.setBounds(area);
@@ -1186,9 +1445,9 @@ void LibrEQAudioProcessorEditor::resized() {
     header.removeFromRight(5);
     autoGainButton.setBounds(header.removeFromRight(44));
     header.removeFromRight(5);
-    phaseButton.setBounds(header.removeFromRight(92));
+    phaseButton.setBounds(header.removeFromRight(88));
     header.removeFromRight(5);
-    analyzerButton.setBounds(header.removeFromRight(108));
+    analyzerButton.setBounds(header.removeFromRight(100));
 
     header.removeFromLeft(74);
     presetButton.setBounds(header.removeFromLeft(126));
@@ -1202,6 +1461,10 @@ void LibrEQAudioProcessorEditor::resized() {
     undoButton.setBounds(header.removeFromLeft(44));
     header.removeFromLeft(2);
     redoButton.setBounds(header.removeFromLeft(44));
+    header.removeFromLeft(8);
+    rangeButton.setBounds(header.removeFromLeft(60));
+    header.removeFromLeft(2);
+    sizeButton.setBounds(header.removeFromLeft(52));
 
     movePanel(true);
 }
