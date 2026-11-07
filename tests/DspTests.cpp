@@ -276,6 +276,77 @@ int main() {
         expectTrue("redesign while playing does not overshoot", maxAbs < 0.25 * 2.0 * 1.15);
     }
 
+    // Dynamic bands.
+    {
+        const auto dynamicLevel = [](Band band, double frequency, double amplitude, double sr = 48000.0) {
+            auto eq = std::make_shared<Equalizer>();
+            eq->prepare(sr, 256, 2);
+            eq->setBand(0, band);
+            return measureStereo([eq](float** channels) { eq->process(channels, 2, 256); }, frequency, sr, amplitude, amplitude).left;
+        };
+        const auto dyn = [](float gain, float threshold) {
+            Band b = make(FilterType::Bell, 3000, gain, 1.5f);
+            b.dynamic = true;
+            b.thresholdDb = threshold;
+            return b;
+        };
+        const auto amp = [](double db) { return std::pow(10.0, db / 20.0); };
+        expectNear("dynamic cut leaves quiet signals alone", dynamicLevel(dyn(-12, -30), 3000, amp(-40)), 0.0, 0.05);
+        expectNear("dynamic cut reaches its limit on loud signals", dynamicLevel(dyn(-12, -30), 3000, amp(-6)), -12.0, 0.2);
+        expectNear("dynamic cut follows the overshoot", dynamicLevel(dyn(-12, -30), 3000, amp(-26)), -3.0, 0.4);
+        expectNear("dynamic boost reaches its limit", dynamicLevel(dyn(6, -30), 3000, amp(-6)), 6.0, 0.2);
+        expectNear("dynamic band ignores other frequencies", dynamicLevel(dyn(-12, -30), 150, amp(-6)), 0.0, 0.1);
+        expectNear("dynamic low shelf", dynamicLevel([] { Band b = make(FilterType::LowShelf, 200, -9); b.dynamic = true; b.thresholdDb = -30; return b; }(), 60, amp(-6)), -9.0, 0.3);
+
+        Band right = dyn(-12, -30);
+        right.placement = Placement::Right;
+        auto eq = std::make_shared<Equalizer>();
+        eq->prepare(48000.0, 256, 2);
+        eq->setBand(0, right);
+        const auto levels = measureStereo([eq](float** channels) { eq->process(channels, 2, 256); }, 3000.0, 48000.0, amp(-6), amp(-6));
+        expectNear("dynamic right band acts on right", levels.right, -12.0, 0.2);
+        expectNear("dynamic right band leaves left", levels.left, 0.0, 0.01);
+        expectNear("live gain reports the applied gain", eq->getLiveGainDb(0), -12.0, 0.2);
+
+        // Attack: a loud burst after silence must be caught within about 20 ms.
+        {
+            Equalizer e;
+            e.prepare(48000.0, 64, 1);
+            e.setBand(0, dyn(-12, -30));
+            std::vector<float> block(64);
+            float* channels[] = { block.data() };
+            std::fill(block.begin(), block.end(), 0.0f);
+            for (int b = 0; b < 100; ++b) e.process(channels, 1, 64);
+            double phase = 0.0;
+            for (int b = 0; b < 15; ++b) { // 20 ms
+                for (auto& v : block) { v = static_cast<float>(amp(-6) * std::sin(phase)); phase += 2.0 * std::numbers::pi * 3000.0 / 48000.0; }
+                e.process(channels, 1, 64);
+            }
+            expectTrue("dynamic attack is fast", e.getLiveGainDb(0) < -10.0f);
+        }
+
+        // Toggling dynamics while loud must not jump.
+        {
+            Equalizer e;
+            e.prepare(48000.0, 64, 1);
+            Band b = dyn(-12, -30);
+            e.setBand(0, b);
+            std::vector<float> block(64);
+            float* channels[] = { block.data() };
+            double phase = 0.0;
+            float previous = 0.0f, worst = 0.0f;
+            const double step = 2.0 * std::numbers::pi * 3000.0 / 48000.0;
+            for (int k = 0; k < 4000; ++k) {
+                if (k == 1500) { b.dynamic = false; b.gainDb = 0.0f; e.setBand(0, b); }
+                if (k == 2500) { b.dynamic = true; b.gainDb = -12.0f; e.setBand(0, b); }
+                for (auto& v : block) { v = static_cast<float>(amp(-6) * std::sin(phase)); phase += step; }
+                e.process(channels, 1, 64);
+                for (float v : block) { if (k > 10) worst = std::max(worst, std::abs(v - previous)); previous = v; }
+            }
+            expectTrue("dynamic toggle does not click", worst < static_cast<float>(amp(-6) * step * 1.1));
+        }
+    }
+
     std::printf(failures == 0 ? "\nAll DSP checks passed\n" : "\n%d DSP checks FAILED\n", failures);
     return failures == 0 ? 0 : 1;
 }

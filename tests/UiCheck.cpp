@@ -133,6 +133,92 @@ int main(int argc, char** argv) {
         }
         processor.band(0).type->setValueNotifyingHost(0.0f);
 
+        // Shift makes drags finer.
+        {
+            graph.setSelected(0);
+            const auto start = graph.nodePosition(0);
+            const float f0 = processor.readBand(0).frequency;
+            graph.mouseDown(mouseAt(graph, start, juce::ModifierKeys::shiftModifier));
+            graph.mouseDrag(mouseAt(graph, start.translated(100.0f, 0.0f), juce::ModifierKeys::shiftModifier));
+            graph.mouseUp(mouseAt(graph, start.translated(100.0f, 0.0f), juce::ModifierKeys::shiftModifier));
+            const float expected = f0 * std::pow(1000.0f, 100.0f / graph.plot().getWidth() * 0.15f);
+            check("shift drag moves 0.15 times as far", std::abs(processor.readBand(0).frequency / expected - 1.0f) < 0.01f);
+            processor.band(0).frequency->setValueNotifyingHost(processor.band(0).frequency->convertTo0to1(4000.0f));
+        }
+
+        // Several bands: lasso, move together, Ctrl-click and delete.
+        {
+            graph.mouseDoubleClick(mouseAt(graph, { graph.frequencyToX(300.0f), graph.gainToY(6.0f) }, {}, 2));
+            check("second band added", processor.isBandUsed(1));
+            const auto r = graph.plot();
+            graph.mouseDown(mouseAt(graph, r.getTopLeft().translated(4.0f, 4.0f)));
+            graph.mouseDrag(mouseAt(graph, r.getBottomRight().translated(-4.0f, -4.0f)));
+            graph.mouseUp(mouseAt(graph, r.getBottomRight().translated(-4.0f, -4.0f)));
+            check("lasso selects both bands", graph.numMarked() == 2 && graph.getSelected() >= 0);
+
+            const float a0 = processor.readBand(0).frequency, b0 = processor.readBand(1).frequency;
+            const float ga = processor.readBand(0).gainDb, gb = processor.readBand(1).gainDb;
+            const auto node = graph.nodePosition(1);
+            graph.mouseDown(mouseAt(graph, node));
+            graph.mouseDrag(mouseAt(graph, node.translated(60.0f, -30.0f)));
+            graph.mouseUp(mouseAt(graph, node.translated(60.0f, -30.0f)));
+            const float ra = processor.readBand(0).frequency / a0, rb = processor.readBand(1).frequency / b0;
+            check("group moves by the same interval", ra > 1.1f && std::abs(ra / rb - 1.0f) < 0.002f);
+            check("group moves by the same gain", std::abs((processor.readBand(0).gainDb - ga) - (processor.readBand(1).gainDb - gb)) < 0.02f);
+
+            graph.mouseDown(mouseAt(graph, graph.nodePosition(0), juce::ModifierKeys::commandModifier));
+            check("ctrl-click removes a band from the selection", graph.numMarked() == 1 && ! graph.isMarked(0));
+            graph.mouseDown(mouseAt(graph, graph.nodePosition(0), juce::ModifierKeys::commandModifier));
+            check("ctrl-click adds it back", graph.numMarked() == 2 && graph.getSelected() == 0);
+            processor.flushHistory(); // The editor's timer does this ten times a second.
+            juce::KeyPress del(juce::KeyPress::deleteKey);
+            graph.keyPressed(del);
+            check("delete removes the whole selection", ! processor.isBandUsed(0) && ! processor.isBandUsed(1) && graph.numMarked() == 0);
+            processor.undo();
+            check("undo brings the selection back", processor.isBandUsed(0) && processor.isBandUsed(1));
+            processor.band(1).used->setValueNotifyingHost(0.0f);
+            processor.band(0).frequency->setValueNotifyingHost(processor.band(0).frequency->convertTo0to1(4000.0f));
+            processor.band(0).gain->setValueNotifyingHost(processor.band(0).gain->convertTo0to1(-6.0f));
+        }
+
+        // Display range: bands beyond it stay on the edge and keep their gain when moved sideways.
+        {
+            processor.band(0).gain->setValueNotifyingHost(processor.band(0).gain->convertTo0to1(20.0f));
+            editor->setRange(6);
+            editor->refreshNow();
+            const auto r = graph.plot();
+            const auto node = graph.nodePosition(0);
+            check("range 6 dB keeps nodes inside", node.y >= r.getY() && node.y <= r.getBottom());
+            graph.setSelected(0);
+            graph.mouseDown(mouseAt(graph, node));
+            graph.mouseDrag(mouseAt(graph, node.translated(30.0f, 0.0f)));
+            graph.mouseUp(mouseAt(graph, node.translated(30.0f, 0.0f)));
+            check("moving sideways keeps an out-of-range gain", std::abs(processor.readBand(0).gainDb - 20.0f) < 0.02f);
+            check("range is stored", processor.displayRange.load() == 6);
+            editor->setRange(30);
+            processor.band(0).gain->setValueNotifyingHost(processor.band(0).gain->convertTo0to1(-6.0f));
+            processor.band(0).frequency->setValueNotifyingHost(processor.band(0).frequency->convertTo0to1(4000.0f));
+        }
+
+        // Window size.
+        {
+            const auto contentWidth = editor->getContent().getWidth();
+            editor->applyScale(0.75f);
+            check("smaller size shrinks the window", editor->getWidth() == juce::roundToInt(contentWidth * 0.75f));
+            check("smaller size keeps the layout", editor->getContent().getWidth() == contentWidth);
+            check("scaled editor renders", ! editor->createComponentSnapshot(editor->getLocalBounds()).isNull());
+            juce::MemoryBlock state;
+            processor.getStateInformation(state);
+            LibrEQAudioProcessor restored;
+            restored.setStateInformation(state.getData(), static_cast<int>(state.getSize()));
+            check("size is saved with the project", std::abs(restored.uiScale.load() - 0.75f) < 1.0e-4f);
+            editor->applyScale(1.0f);
+            check("normal size restores the window", editor->getWidth() == contentWidth);
+        }
+
+        check("frequency accepts 1.5k", std::abs(processor.band(0).frequency->convertFrom0to1(processor.band(0).frequency->getValueForText("1.5k")) - 1500.0f) < 0.5f);
+        check("frequency accepts 2 kHz", std::abs(processor.band(0).frequency->convertFrom0to1(processor.band(0).frequency->getValueForText("2 kHz")) - 2000.0f) < 0.5f);
+
         // Delete removes it.
         graph.setSelected(0);
         juce::KeyPress del(juce::KeyPress::deleteKey);
@@ -157,6 +243,8 @@ int main(int argc, char** argv) {
         setBand(3, 0, 1800.0f, 4.0f, 0.9f, 0);
         setBand(4, 5, 5200.0f, 0.0f, 6.0f, 0);
         setBand(5, 2, 9500.0f, 5.0f, 0.7f, 0);
+        processor.band(3).dynamic->setValueNotifyingHost(1.0f);
+        processor.band(3).threshold->setValueNotifyingHost(processor.band(3).threshold->convertTo0to1(-50.0f));
 
         juce::MemoryBlock state;
         processor.getStateInformation(state);
@@ -485,6 +573,34 @@ int main(int argc, char** argv) {
             large.setSample(1, 0, 1.0f);
             p.processBlock(large, midi);
             check("large blocks stay finite", std::isfinite(large.getMagnitude(0, 8192)) && large.getMagnitude(0, 8192) > 0.5f);
+        }
+
+        // Dynamic bands through the whole processor, in both modes.
+        for (bool linear : { false, true }) {
+            LibrEQAudioProcessor p;
+            gesture(p.getPhaseParameter(), linear ? 1.0f : 0.0f);
+            prepare(p);
+            bell(p, 0, 3000.0f, -12.0f, 1.5f);
+            gesture(p.band(0).dynamic, 1.0f);
+            gesture(p.band(0).threshold, -30.0f);
+            bell(p, 1, 300.0f, 6.0f, 1.0f);
+            p.runBackgroundDesign(true);
+            const char* mode = linear ? " (linear phase)" : " (zero latency)";
+            check((juce::String("dynamic band acts on a loud signal") + mode).toRawUTF8(), std::abs(rmsDbAfter(p, 3000.0) + 12.0) < 0.3);
+            check((juce::String("live gain is reported") + mode).toRawUTF8(), std::abs(p.getLiveGainDb(0) + 12.0f) < 0.3f);
+            check((juce::String("static band still works beside it") + mode).toRawUTF8(), std::abs(rmsDbAfter(p, 300.0) - 6.0) < 0.3);
+            gesture(p.band(0).threshold, 0.0f);
+            check((juce::String("dynamic band rests below its threshold") + mode).toRawUTF8(), std::abs(rmsDbAfter(p, 3000.0)) < 0.3);
+            if (linear)
+                check("linear phase keeps its latency with dynamic bands", p.getLatencySamples() == 4096);
+        }
+        {
+            LibrEQAudioProcessor p;
+            prepare(p);
+            bell(p, 0, 3000.0f, -12.0f, 1.5f);
+            gesture(p.band(0).dynamic, 1.0f);
+            p.runBackgroundDesign(true);
+            check("auto gain ignores dynamic bands", std::abs(p.getAutoGainDb()) < 0.01f);
         }
 
         // CPU, 24 active bands, one second of stereo audio.
